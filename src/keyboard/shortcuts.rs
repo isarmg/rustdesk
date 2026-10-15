@@ -1159,7 +1159,7 @@ mod tests {
         let remote_held = std::cell::RefCell::new(
             chord.into_iter().collect::<std::collections::HashSet<_>>()
         );
-        for key in [Key::KeyP, Key::KeyC] {
+        for key in [Key::KeyP, Key::KeyS] {
             assert!(try_dispatch(
                 Some(&SID_A),
                 &make_press(key),
@@ -1317,15 +1317,18 @@ mod tests {
             reset_fired_keys();
             clear_session_state(&SID_A);
             let sent = std::cell::RefCell::new(Vec::new());
+            let consumed = std::cell::RefCell::new(Vec::new());
             let send = |event: &KeyEvent| {
-                sent.borrow_mut().push(windows_shortcut_modifier(event));
+                sent.borrow_mut().push(event.clone());
             };
             let handle = |event: &rdev::Event| {
                 #[cfg(windows)]
                 if matches!(event.event_type, EventType::KeyPress(k) | EventType::KeyRelease(k) if k == alt) {
                     rdev::set_modifier(alt, matches!(event.event_type, EventType::KeyPress(_)));
                 }
-                if !try_dispatch(Some(&SID_A), event, mode, || "windows".into(), &send) {
+                let hit = try_dispatch(Some(&SID_A), event, mode, || "windows".into(), &send);
+                consumed.borrow_mut().push(hit);
+                if !hit {
                     for key in super::super::event_to_key_events(
                         "windows".into(), event, super::super::get_keyboard_mode_enum(mode), Some(0),
                     ) {
@@ -1333,14 +1336,29 @@ mod tests {
                     }
                 }
             };
-            handle(&make_press(alt));
-            handle(&make_press(Key::KeyM));
-            handle(&make_press(Key::KeyM));
-            handle(&make_release(Key::KeyM));
-            handle(&make_release(alt));
+            let events = [make_press(alt), make_press(Key::KeyM), make_press(Key::KeyM),
+                make_release(Key::KeyM), make_release(alt)];
+            for event in &events {
+                handle(event);
+            }
             reset_fired_keys();
             clear_session_state(&SID_A);
-            results.push((mode, alt, sent.into_inner()));
+            let sent = sent.into_inner();
+            // Wayland cannot identify the right-Alt layout, so AltGraph must
+            // remain ordinary input rather than risk consuming text.
+            #[cfg(target_os = "linux")]
+            if alt == Key::AltGr {
+                assert_eq!(*consumed.borrow(), vec![false; events.len()], "{mode}");
+                let expected: Vec<_> = events.iter().flat_map(|event| {
+                    super::super::event_to_key_events(
+                        "windows".into(), event, super::super::get_keyboard_mode_enum(mode), Some(0),
+                    )
+                }).collect();
+                assert_eq!(sent.len(), events.len(), "every AltGraph event must be forwarded in {mode}");
+                assert_eq!(sent, expected, "AltGraph must pass through unchanged in {mode}");
+                continue;
+            }
+            results.push((mode, alt, sent.iter().map(windows_shortcut_modifier).collect::<Vec<_>>()));
         }
         assert!(results.iter().all(|(_, alt, sent)| *sent == vec![
             (*alt, true), (Key::ControlLeft, true), (*alt, false),

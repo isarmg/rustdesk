@@ -809,7 +809,8 @@ impl AudioHandler {
                 playback_writer.write_output(data);
             },
             err_fn,
-                )?;
+            timeout,
+        )?;
         stream.play()?;
         self.audio_stream = Some(Box::new(stream));
         self.playback_status = playback_status;
