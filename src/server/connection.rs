@@ -3654,23 +3654,6 @@ async fn start_ipc(
                                 let data = ipc::Data::ClickTime(ct);
                                 stream.send(&data).await?;
                             }
-                            // FileBlockFromCM: data is always sent separately via send_raw.
-                            // The data field has #[serde(skip)], so it's empty after deserialization.
-                            // Read the raw data bytes following this message.
-                            //
-                            // Note: Empty data (for empty files) is correctly handled. BytesCodec with
-                            // raw=false adds a length prefix, so next_raw() returns empty BytesMut for
-                            // zero-length frames. This mirrors the WriteBlock pattern below.
-                            ipc::Data::FileBlockFromCM { id, file_num, data: _, compressed, conn_id } => {
-                                let raw_data = stream.next_raw().await?;
-                                tx_from_cm.send(ipc::Data::FileBlockFromCM {
-                                    id,
-                                    file_num,
-                                    data: raw_data.into(),
-                                    compressed,
-                                    conn_id,
-                                })?;
-                            }
                             _ => {
                                 tx_from_cm.send(data)?;
                             }
@@ -3682,15 +3665,7 @@ async fn start_ipc(
             res = rx_to_cm.recv() => {
                 match res {
                     Some(data) => {
-                        if let Data::FS(ipc::FS::WriteBlock{id,
-                            file_num,
-                            data,
-                            compressed}) = data {
-                                stream.send(&Data::FS(ipc::FS::WriteBlock{id, file_num, data: Bytes::new(), compressed})).await?;
-                                stream.send_raw(data).await?;
-                        } else {
-                            stream.send(&data).await?;
-                        }
+                        stream.send(&data).await?;
                     }
                     None => {
                         bail!("expected");

@@ -8,6 +8,7 @@ package com.carriez.flutter_hbb
  */
 
 import ffi.FFI
+import kotlin.concurrent.thread
 
 import android.app.Activity
 import android.content.ComponentName
