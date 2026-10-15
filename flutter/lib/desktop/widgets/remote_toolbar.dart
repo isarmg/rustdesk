@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
+import 'package:flutter_hbb/common/widgets/stream_performance_status.dart';
 import 'package:flutter_hbb/common/widgets/keyboard_shortcuts/display.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -1753,10 +1754,12 @@ class _DisplayMenuState extends State<_DisplayMenu> {
         _screenAdjustor.adjustWindow(context),
         viewStyle(customPercent: _customPercent),
         scrollStyle(state, colorScheme),
-        imageQuality(),
         if (!isWeb && isDesktop && ffi.connType == ConnType.defaultConn)
-          streamingMode(state),
-        codec(),
+          streamPreferences(state)
+        else ...[
+          imageQuality(),
+          codec(),
+        ],
         if (ffi.connType == ConnType.defaultConn)
           _ResolutionsMenu(
             id: widget.id,
@@ -1958,6 +1961,27 @@ class _DisplayMenuState extends State<_DisplayMenu> {
     });
   }
 
+  streamPreferences(_IconSubmenuButtonState state) {
+    return _SubmenuButton(
+      ffi: ffi,
+      child: Text(translate('Stream preferences')),
+      menuChildren: [
+        imageQuality(),
+        streamingMode(state),
+        codec(preferences: true),
+        const Divider(),
+        AnimatedBuilder(
+          animation: ffi.qualityMonitorModel,
+          builder: (context, child) => StreamPerformanceStatus(
+            fps: ffi.qualityMonitorModel.data.fps,
+            codec: ffi.qualityMonitorModel.data.codecFormat,
+            translate: translate,
+          ),
+        ),
+      ],
+    );
+  }
+
   streamingMode(_IconSubmenuButtonState state) {
     return futureBuilder(
         future: Future.wait([
@@ -1979,7 +2003,7 @@ class _DisplayMenuState extends State<_DisplayMenu> {
 
           return _SubmenuButton(
               ffi: ffi,
-              child: Text(translate('Streaming mode')),
+              child: Text(translate('Target frame rate')),
               menuChildren: [
                 CkbMenuButton(
                     ffi: ffi,
@@ -2027,7 +2051,7 @@ class _DisplayMenuState extends State<_DisplayMenu> {
         });
   }
 
-  codec() {
+  codec({bool preferences = false}) {
     return futureBuilder(
         future: toolbarCodec(context, id, ffi),
         hasData: (data) {
@@ -2036,7 +2060,7 @@ class _DisplayMenuState extends State<_DisplayMenu> {
 
           return _SubmenuButton(
               ffi: widget.ffi,
-              child: Text(translate('Codec')),
+              child: Text(translate(preferences ? 'Encoding preference' : 'Codec')),
               menuChildren: v
                   .map((e) => RdoMenuButton(
                       value: e.value,

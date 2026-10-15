@@ -821,5 +821,12 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Enter an IP address or hostname, with an optional port. Use [IPv6]:port for IPv6.", ""),
         ("Connect using a LAN device, IP address, or hostname.", ""),
         ("Address", ""),
+        ("Stream preferences", "串流偏好"),
+        ("Target frame rate", "目標影格率"),
+        ("Encoding preference", "編碼偏好"),
+        ("Latest received", "最近收到的資料"),
+        ("Actual frame rate", "實際影格率"),
+        ("Actual codec", "實際編碼"),
+        ("Preferences are saved for this peer. Encoding is shared with other viewers.", "會記住此裝置的偏好。多個觀看者共用編碼。"),
     ].iter().cloned().collect();
 }

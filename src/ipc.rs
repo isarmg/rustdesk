@@ -60,6 +60,7 @@ use ipc_auth::{
     authorize_windows_main_ipc_connection, portable_service_listener_security_attributes,
     should_allow_everyone_create_on_windows,
 };
+pub(crate) use ipc_auth::verify_management_service_peer;
 #[cfg(target_os = "linux")]
 pub(crate) use ipc_auth::{
     ensure_peer_executable_matches_current_by_fd, is_allowed_service_peer_uid,

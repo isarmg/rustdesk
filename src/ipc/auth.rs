@@ -26,7 +26,50 @@ use std::{
     path::{Path, PathBuf},
 };
 #[cfg(windows)]
-use windows::Win32::{Foundation::HANDLE, System::Pipes::GetNamedPipeClientProcessId};
+use windows::Win32::{
+    Foundation::HANDLE,
+    System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId},
+};
+
+/// Verify the connected privileged owner before sending management credentials.
+/// This does not select an owner, authorize enrollment, or change ordinary IPC.
+pub(crate) fn verify_management_service_peer(
+    stream: &ConnectionTmpl<parity_tokio_ipc::ConnectionClient>,
+) -> ResultType<()> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        use std::os::unix::io::AsRawFd;
+        return verify_management_service_fd(stream.inner.get_ref().as_raw_fd());
+    }
+    #[cfg(windows)]
+    {
+        return verify_management_service_handle(HANDLE(stream.inner.get_ref().as_raw_handle()));
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn verify_management_service_fd(fd: RawFd) -> ResultType<()> {
+    if peer_uid_from_fd(fd) != Some(0) {
+        bail!("Management IPC peer is not a verified root service");
+    }
+    ensure_peer_executable_matches_current_by_pid_opt(
+        peer_pid_from_fd(fd),
+        crate::POSTFIX_SERVICE,
+    )
+}
+
+#[cfg(windows)]
+fn verify_management_service_handle(handle: HANDLE) -> ResultType<()> {
+    if handle.is_invalid() {
+        bail!("Invalid management IPC handle");
+    }
+    let mut pid = 0;
+    unsafe { GetNamedPipeServerProcessId(handle, &mut pid) }?;
+    if pid == 0 || !crate::platform::windows::is_process_running_as_system(pid)? {
+        bail!("Management IPC peer is not a verified SYSTEM service");
+    }
+    ensure_peer_executable_matches_current_by_pid_opt(Some(pid), crate::POSTFIX_SERVICE)
+}
 
 #[cfg(windows)]
 #[inline]
@@ -871,6 +914,28 @@ impl ConnectionTmpl<parity_tokio_ipc::Connection> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn management_service_requires_kernel_peer_credentials() {
+        use std::os::unix::{io::AsRawFd, net::UnixStream};
+        let (client, _server) = UnixStream::pair().unwrap();
+        let result = super::verify_management_service_fd(client.as_raw_fd());
+        assert_eq!(result.is_ok(), unsafe { hbb_common::libc::geteuid() } == 0);
+        assert!(super::verify_management_service_fd(-1).is_err());
+        let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        assert!(super::verify_management_service_fd(file.as_raw_fd()).is_err());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn management_service_rejects_non_pipe_handles() {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+        assert!(super::verify_management_service_handle(HANDLE::default()).is_err());
+        let file = std::fs::File::open(std::env::current_exe().unwrap()).unwrap();
+        assert!(super::verify_management_service_handle(HANDLE(file.as_raw_handle())).is_err());
+    }
+
     #[test]
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn test_service_peer_uid_policy() {
