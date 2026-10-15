@@ -815,5 +815,11 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Off", "关"),
         ("Streaming mode", "串流模式"),
         ("Enable streaming mode", "启用串流模式"),
+        ("Trust this device?", ""),
+        ("Trust and connect", ""),
+        ("Enter IP address or hostname", ""),
+        ("Enter an IP address or hostname, with an optional port. Use [IPv6]:port for IPv6.", ""),
+        ("Connect using a LAN device, IP address, or hostname.", ""),
+        ("Address", ""),
     ].iter().cloned().collect();
 }

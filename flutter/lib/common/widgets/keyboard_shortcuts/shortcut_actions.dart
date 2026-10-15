@@ -64,7 +64,6 @@ final List<KeyboardShortcutActionGroup> kKeyboardShortcutActionGroups = [
     KeyboardShortcutActionEntry(kShortcutActionInsertLock, 'Insert Lock'),
     KeyboardShortcutActionEntry(
         kShortcutActionToggleBlockInput, 'Block user input'),
-    KeyboardShortcutActionEntry(kShortcutActionSwitchSides, 'Switch Sides'),
     KeyboardShortcutActionEntry(kShortcutActionRefresh, 'Refresh'),
     KeyboardShortcutActionEntry(kShortcutActionScreenshot, 'Take screenshot'),
   ]),
@@ -229,9 +228,6 @@ List<KeyboardShortcutActionGroup> filterKeyboardShortcutActionGroupsForPlatform(
       return false;
     }
     if (!cap.includeCloseTabShortcut && id == kShortcutActionCloseTab) {
-      return false;
-    }
-    if (!cap.includeSwitchSidesShortcut && id == kShortcutActionSwitchSides) {
       return false;
     }
     if (!cap.includeResetCanvasShortcut && id == kShortcutActionResetCanvas) {

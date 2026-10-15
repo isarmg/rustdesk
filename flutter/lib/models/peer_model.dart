@@ -9,9 +9,7 @@ class Peer {
   String hostname;
   String platform;
   String alias;
-  bool forceAlwaysRelay = false;
   bool online = false;
-  bool? sameServer;
 
   String getId() {
     if (alias != '') {
@@ -26,8 +24,7 @@ class Peer {
         hostname = json['hostname'] ?? '',
         platform = json['platform'] ?? '',
         alias = json['alias'] ?? '',
-        forceAlwaysRelay = json['forceAlwaysRelay'] == 'true',
-        sameServer = json['same_server'];
+        online = json['online'] == true || json['online'] == 'true';
 
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
@@ -36,8 +33,7 @@ class Peer {
       "hostname": hostname,
       "platform": platform,
       "alias": alias,
-      "forceAlwaysRelay": forceAlwaysRelay.toString(),
-      'same_server': sameServer,
+      "online": online.toString(),
     };
   }
 
@@ -47,8 +43,6 @@ class Peer {
     required this.hostname,
     required this.platform,
     required this.alias,
-    required this.forceAlwaysRelay,
-    this.sameServer,
   });
 
   Peer.loading()
@@ -58,15 +52,13 @@ class Peer {
           hostname: '...',
           platform: '...',
           alias: '',
-          forceAlwaysRelay: false,
         );
   bool equal(Peer other) {
     return id == other.id &&
         username == other.username &&
         hostname == other.hostname &&
         platform == other.platform &&
-        alias == other.alias &&
-        forceAlwaysRelay == other.forceAlwaysRelay;
+        alias == other.alias;
   }
 
   factory Peer.copy(Peer other) {
@@ -75,15 +67,11 @@ class Peer {
         username: other.username,
         hostname: other.hostname,
         platform: other.platform,
-        alias: other.alias,
-        forceAlwaysRelay: other.forceAlwaysRelay,
-        sameServer: other.sameServer);
+        alias: other.alias);
     peer.online = other.online;
     return peer;
   }
 }
-
-enum UpdateEvent { online, load }
 
 typedef GetInitPeers = RxList<Peer> Function();
 
@@ -97,17 +85,12 @@ class Peers extends ChangeNotifier {
   // And then load all peers later.
   List<String> restPeerIds = List.empty(growable: true);
   final GetInitPeers? getInitPeers;
-  UpdateEvent event = UpdateEvent.load;
-  static const _cbQueryOnlines = 'callback_query_onlines';
 
   Peers(
       {required this.name,
       required this.getInitPeers,
       required this.loadEvent}) {
     peers = getInitPeers?.call() ?? [];
-    platformFFI.registerEventHandler(_cbQueryOnlines, name, (evt) async {
-      _updateOnlineState(evt);
-    });
     platformFFI.registerEventHandler(loadEvent, name, (evt) async {
       _updatePeers(evt);
     });
@@ -115,7 +98,6 @@ class Peers extends ChangeNotifier {
 
   @override
   void dispose() {
-    platformFFI.unregisterEventHandler(_cbQueryOnlines, name);
     platformFFI.unregisterEventHandler(loadEvent, name);
     super.dispose();
   }
@@ -132,38 +114,7 @@ class Peers extends ChangeNotifier {
     return peers.length;
   }
 
-  void _updateOnlineState(Map<String, dynamic> evt) {
-    int changedCount = 0;
-    evt['onlines'].split(',').forEach((online) {
-      for (var i = 0; i < peers.length; i++) {
-        if (peers[i].id == online) {
-          if (!peers[i].online) {
-            changedCount += 1;
-            peers[i].online = true;
-          }
-        }
-      }
-    });
-
-    evt['offlines'].split(',').forEach((offline) {
-      for (var i = 0; i < peers.length; i++) {
-        if (peers[i].id == offline) {
-          if (peers[i].online) {
-            changedCount += 1;
-            peers[i].online = false;
-          }
-        }
-      }
-    });
-
-    if (changedCount > 0) {
-      event = UpdateEvent.online;
-      notifyListeners();
-    }
-  }
-
   void _updatePeers(Map<String, dynamic> evt) {
-    final onlineStates = _getOnlineStates();
     if (getInitPeers != null) {
       peers = getInitPeers?.call() ?? [];
     } else {
@@ -175,20 +126,7 @@ class Peers extends ChangeNotifier {
       restPeerIds = (evt['ids'] as String).split(',');
     }
 
-    for (var peer in peers) {
-      final state = onlineStates[peer.id];
-      peer.online = state != null && state != false;
-    }
-    event = UpdateEvent.load;
     notifyListeners();
-  }
-
-  Map<String, bool> _getOnlineStates() {
-    var onlineStates = <String, bool>{};
-    for (var peer in peers) {
-      onlineStates[peer.id] = peer.online;
-    }
-    return onlineStates;
   }
 
   List<Peer> _decodePeers(String peersStr) {

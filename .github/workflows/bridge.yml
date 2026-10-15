@@ -6,9 +6,10 @@ on:
   workflow_call:
 
 env:
+  FLUTTER_VERSION: "3.47.7"
   CARGO_EXPAND_VERSION: "1.0.95"
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
-  RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503
+  RUST_VERSION: "1.99.0"
 
 jobs:
   generate_bridge:
@@ -17,21 +18,11 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          # Default bridge for every platform still on Flutter 3.24.5 (generated with 3.22.3).
           - {
               target: x86_64-unknown-linux-gnu,
               os: ubuntu-22.04,
               extra-build-args: "",
-              flutter-version: "3.22.3",
               artifact-name: "bridge-artifact",
-            }
-          # Dedicated bridge for the Windows arm64 build (Flutter 3.44); runs in parallel.
-          - {
-              target: x86_64-unknown-linux-gnu,
-              os: ubuntu-22.04,
-              extra-build-args: "",
-              flutter-version: "3.44.8",
-              artifact-name: "bridge-artifact-flutter-3.44",
             }
     steps:
       - name: Checkout source code
@@ -74,13 +65,13 @@ jobs:
         uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3
         with:
           path: /tmp/flutter_rust_bridge
-          key: bridge-${{ matrix.job.flutter-version }}
+          key: bridge-${{ env.FLUTTER_VERSION }}
 
       - name: Install flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: "stable"
-          flutter-version: ${{ matrix.job.flutter-version }}
+          flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
       - name: Install flutter rust bridge deps
@@ -88,11 +79,6 @@ jobs:
         run: |
           cargo install cargo-expand --version ${{ env.CARGO_EXPAND_VERSION }} --locked
           cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
-          if [[ "${{ matrix.job.flutter-version }}" != "3.22.3" ]]; then
-            # Flutter 3.44 bridge for Windows arm64: match that build's source/pubspec state so the
-            # generated *.freezed.dart compiles against the same Flutter/freezed it resolves.
-            bash .github/patches/apply_flutter_3.44_source_patches.sh
-          fi
           pushd flutter && flutter pub get && popd
 
       - name: Run flutter rust bridge

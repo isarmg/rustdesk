@@ -4,7 +4,6 @@
   <img src="../res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#free-public-servers">Server</a> •
   <a href="#raw-steps-to-build">Build</a> •
-  <a href="#how-to-build-with-docker">Docker</a> •
   <a href="#file-structure">Structure</a> •
   <a href="#snapshot">Snapshot</a><br>
   [<a href="../README.md">English</a>] | [<a href="README-UA.md">Українська</a>] | [<a href="README-CS.md">česky</a>] | [<a href="README-ZH.md">中文</a>] | [<a href="README-HU.md">Magyar</a>] | [<a href="README-ES.md">Español</a>] | [<a href="README-FA.md">فارسی</a>] | [<a href="README-FR.md">Français</a>] | [<a href="README-DE.md">Deutsch</a>] | [<a href="README-PL.md">Polski</a>] | [<a href="README-ID.md">Indonesian</a>] | [<a href="README-FI.md">Suomi</a>] | [<a href="README-ML.md">മലയാളം</a>] | [<a href="README-JP.md">日本語</a>] | [<a href="README-NL.md">Nederlands</a>] | [<a href="README-IT.md">Italiano</a>] | [<a href="README-RU.md">Русский</a>] | [<a href="README-PTBR.md">Português (Brasil)</a>] | [<a href="README-EO.md">Esperanto</a>] | [<a href="README-KR.md">한국어</a>] | [<a href="README-AR.md">العربي</a>] | [<a href="README-GR.md">Ελληνικά</a>]<br>
@@ -107,35 +106,9 @@ mv libsciter-gtk.so target/debug
 VCPKG_ROOT=$HOME/vcpkg cargo run
 ```
 
-## Cách build bằng Docker
+## Native deployment
 
-Bắt đầu bằng cách sao chép repo này về máy tính của bạn và tạo Docker container:
-
-```sh
-git clone https://github.com/rustdesk/rustdesk
-cd rustdesk
-docker build -t "rustdesk-builder" .
-```
-
-Sau đó, mỗi khi bạn chạy ứng dụng, thì hãy chạy dòng lệnh sau:
-
-```sh
-docker run --rm -it -v $PWD:/home/user/rustdesk -v rustdesk-git-cache:/home/user/.cargo/git -v rustdesk-registry-cache:/home/user/.cargo/registry -e PUID="$(id -u)" -e PGID="$(id -g)" rustdesk-builder
-```
-
-Lưu ý rằng **lần build đầu tiên có thể mất thời gian hơn trước khi các dependencies được lưu vào bộ nhớ cache**, nhưng các lần build sau sẽ nhanh hơn. Ngoài ra, nếu bạn cần chỉ định các đối số khác cho lệnh build, bạn có thể thêm chúng vào cuối lệnh ở phần `<OPTIONAL-ARGS>`. Ví dụ, nếu bạn muốn build phiên bản tối ưu hóa, bạn sẽ chạy lệnh trên với tùy chọn `--release`. Kết quả biên dịch sẽ được lưu trong thư mục target trên máy tính của bạn, và có thể chạy với lệnh:
-
-```sh
-target/debug/rustdesk
-```
-
-Nếu bạn đang chạy bản build được tối ưu hóa, thì bạn có thể chạy với lệnh:
-
-```sh
-target/release/rustdesk
-```
-
-Hãy đảm bảo rằng bạn đang chạy các lệnh này từ gốc của thư mục **RustDesk**, nếu không, ứng dụng có thể không thể tìm thấy các tệp tài nguyên cần thiết. Hãy lưu ý rằng các câu lệnh con khác của **cargo** như **install** hoặc **run** hiện không được hỗ trợ qua phương pháp này, vì chúng sẽ cài đặt hoặc chạy chương trình bên trong **container** thay vì trên máy tính của bạn.
+For this fork, follow the [native build and deployment instructions](../README.md#编译部署) and [pinned toolchain](BUILD-TOOLCHAIN.md). Applications run natively on physical devices.
 
 ## Cấu trúc tệp tin
 

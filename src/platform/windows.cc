@@ -1,4 +1,5 @@
 #include <windows.h>
+#include "windows_supported.h"
 #include <wtsapi32.h>
 #include <tlhelp32.h>
 #include <comdef.h>
@@ -220,14 +221,14 @@ extern "C"
         return bResult;
     }
 
+    BOOL is_supported_windows()
+    {
+        return rustdesk_supported_windows() ? TRUE : FALSE;
+    }
+
     bool is_windows_server()
     {
         return IsWindowsServer();
-    }
-
-    bool is_windows_10_or_greater()
-    {
-        return IsWindows10OrGreater();
     }
 
     HANDLE LaunchProcessWin(LPCWSTR cmd, DWORD dwSessionId, BOOL as_user, BOOL show, DWORD *pDwTokenPid)

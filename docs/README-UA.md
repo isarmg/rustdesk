@@ -1,7 +1,6 @@
 <p align="center">
   <img src="../res/logo-header.svg" alt="RustDesk - Ваш віддалений робочий стіл"><br>
   <a href="#кроки-для-збірки">Збірка</a> •
-  <a href="#як-зібрати-за-допомогою-docker">Docker</a> •
   <a href="#структура-файлів">Структура</a> •
   <a href="#знімки-екрана">Знімки екрана</a><br>
   [<a href="../README.md">English</a>] | [<a href="README-CS.md">česky</a>] | [<a href="README-ZH.md">中文</a>] | [<a href="README-HU.md">Magyar</a>] | [<a href="README-ES.md">Español</a>] | [<a href="README-FA.md">فارسی</a>] | [<a href="README-FR.md">Français</a>] | [<a href="README-DE.md">Deutsch</a>] | [<a href="README-PL.md">Polski</a>] | [<a href="README-ID.md">Indonesian</a>] | [<a href="README-FI.md">Suomi</a>] | [<a href="README-ML.md">മലയാളം</a>] | [<a href="README-JP.md">日本語</a>] | [<a href="README-NL.md">Nederlands</a>] | [<a href="README-IT.md">Italiano</a>] | [<a href="README-RU.md">Русский</a>] | [<a href="README-PTBR.md">Português (Brasil)</a>] | [<a href="README-EO.md">Esperanto</a>] | [<a href="README-KR.md">한국어</a>] | [<a href="README-AR.md">العربي</a>] | [<a href="README-VN.md">Tiếng Việt</a>] | [<a href="README-DA.md">Dansk</a>] | [<a href="README-GR.md">Ελληνικά</a>] | [<a href="README-TR.md">Türkçe</a>] | [<a href="README-NO.md">Norsk</a>] | [<a href="README-RO.md">Română</a>]<br>
@@ -124,36 +123,9 @@ mv libsciter-gtk.so target/debug
 VCPKG_ROOT=$HOME/vcpkg cargo run
 ```
 
-## Як зібрати за допомогою Docker
+## Native deployment
 
-Спочатку клонуйте репозиторій і зберіть Docker-контейнер:
-
-```sh
-git clone https://github.com/rustdesk/rustdesk
-cd rustdesk
-git submodule update --init --recursive
-docker build -t "rustdesk-builder" .
-```
-
-Після цього щоразу, коли потрібно зібрати застосунок, запускайте таку команду:
-
-```sh
-docker run --rm -it -v $PWD:/home/user/rustdesk -v rustdesk-git-cache:/home/user/.cargo/git -v rustdesk-registry-cache:/home/user/.cargo/registry -e PUID="$(id -u)" -e PGID="$(id -g)" rustdesk-builder
-```
-
-Перша збірка може тривати довше, доки залежності не буде кешовано. Наступні збірки виконуватимуться швидше. Якщо потрібно передати додаткові аргументи команді збірки, додайте їх після `rustdesk-builder` у кінці команди `docker run`. Наприклад, для оптимізованої release-збірки додайте `--release`. Отриманий виконуваний файл буде доступний у каталозі `target` вашої системи та його можна запустити так:
-
-```sh
-target/debug/rustdesk
-```
-
-Або, якщо використовується release-збірка:
-
-```sh
-target/release/rustdesk
-```
-
-Запускайте ці команди з кореневого каталогу репозиторію RustDesk, інакше застосунок може не знайти потрібні ресурси. Також зверніть увагу, що інші підкоманди cargo, наприклад `install` або `run`, наразі не підтримуються цим способом, оскільки вони встановлюватимуть або запускатимуть програму всередині контейнера, а не на хост-системі.
+For this fork, follow the [native build and deployment instructions](../README.md#编译部署) and [pinned toolchain](BUILD-TOOLCHAIN.md). Applications run natively on physical devices.
 
 ## Структура файлів
 

@@ -214,7 +214,7 @@ pub fn core_main() -> Option<CoreMainAction> {
     } else {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         // Root CLI management commands must talk to the user `--server` main IPC.
-        // Example: `sudo rustdesk --option custom-rendezvous-server` should query the
+        // Example: `sudo rustdesk --option direct-access-port` should query the
         // user's IPC instead of root's `/tmp/<app>-0/ipc`; `connect()` still limits this
         // routing to empty-postfix main IPC only.
         let _user_main_ipc_scope = if crate::platform::is_installed()
@@ -437,53 +437,6 @@ pub fn core_main() -> Option<CoreMainAction> {
         } else if args[0] == "--get-id" {
             println!("{}", crate::ipc::get_id());
             return None;
-        } else if args[0] == "--set-id" {
-            if is_cli_setting_change_disabled() {
-                println!("Settings are disabled!");
-                return None;
-            }
-            if config::Config::is_disable_change_id() {
-                println!("Changing ID is disabled!");
-                return None;
-            }
-            if args.len() == 2 {
-                if crate::platform::is_installed() && is_root() {
-                    let old_id = crate::ipc::get_id();
-                    let mut res = crate::ui_interface::change_id_shared(args[1].to_owned(), old_id);
-                    if res.is_empty() {
-                        res = "Done!".to_owned();
-                    }
-                    println!("{}", res);
-                } else {
-                    println!("Installation and administrative privileges required!");
-                }
-            }
-            return None;
-        } else if args[0] == "--config" {
-            if args.len() == 2 && !args[0].contains("host=") {
-                if crate::platform::is_installed() && is_root() {
-                    // encrypted string used in renaming exe.
-                    let name = if args[1].ends_with(".exe") {
-                        args[1].to_owned()
-                    } else {
-                        format!("{}.exe", args[1])
-                    };
-                    if let Ok(lic) = crate::custom_server::get_custom_server_from_string(&name) {
-                        if !lic.host.is_empty() {
-                            crate::ui_interface::set_option("key".into(), lic.key);
-                            crate::ui_interface::set_option(
-                                "custom-rendezvous-server".into(),
-                                lic.host,
-                            );
-                            crate::ui_interface::set_option("api-server".into(), lic.api);
-                            crate::ui_interface::set_option("relay-server".into(), lic.relay);
-                        }
-                    }
-                } else {
-                    println!("Installation and administrative privileges required!");
-                }
-            }
-            return None;
         } else if args[0] == "--option" {
             if is_cli_setting_change_disabled() {
                 println!("Settings are disabled!");
@@ -502,7 +455,15 @@ pub fn core_main() -> Option<CoreMainAction> {
             return None;
         } else if args[0] == "--check-hwcodec-config" {
             #[cfg(feature = "hwcodec")]
-            crate::ipc::hwcodec_process();
+            if args.get(1).map(String::as_str) == Some("--stdout") {
+                println!(
+                    "{}{}",
+                    crate::client::hwcodec::OUTPUT_PREFIX,
+                    scrap::hwcodec::check_available_hwcodec()
+                );
+            } else {
+                crate::ipc::hwcodec_process();
+            }
             return None;
         } else if args[0] == "--cm" {
             // call connection manager to establish connections
@@ -576,15 +537,6 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
             "--password" => {
                 if let Some(password) = args.next() {
                     param_array.push(format!("password={password}"));
-                }
-            }
-            "--relay" => {
-                param_array.push(format!("relay=true"));
-            }
-            // inner
-            "--switch_uuid" => {
-                if let Some(switch_uuid) = args.next() {
-                    param_array.push(format!("switch_uuid={switch_uuid}"));
                 }
             }
             _ => {}
@@ -673,8 +625,6 @@ fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
         Some("--password")
             | Some("--set-unlock-pin")
             | Some("--get-id")
-            | Some("--set-id")
-            | Some("--config")
             | Some("--option")
     )
 }

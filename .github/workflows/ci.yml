@@ -1,6 +1,7 @@
 name: CI
 
 env:
+  RUST_VERSION: "1.99.0"
 #   MIN_SUPPORTED_RUST_VERSION: "1.46.0"
 #   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
@@ -28,27 +29,6 @@ permissions:
   contents: read
 
 jobs:
-  lockfile-diagnostic:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          submodules: recursive
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: stable
-      - name: Resolve metadata for lockfile diagnosis
-        run: cargo metadata --format-version 1 > "$RUNNER_TEMP/resolved-metadata.json"
-      - name: Require the committed lockfile to match Cargo resolution
-        run: git diff --exit-code -- Cargo.lock
-      - name: Preserve the resolver output for repair
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: resolved-cargo-lock
-          path: Cargo.lock
-          retention-days: 3
-
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
 
@@ -100,18 +80,7 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          # - { target: aarch64-unknown-linux-gnu   , os: ubuntu-20.04, use-cross: true }
-          # - { target: arm-unknown-linux-gnueabihf , os: ubuntu-20.04, use-cross: true }
-          # - { target: arm-unknown-linux-musleabihf, os: ubuntu-20.04, use-cross: true }
-          # - { target: i686-pc-windows-msvc        , os: windows-2022                  }
-          # - { target: i686-unknown-linux-gnu      , os: ubuntu-20.04, use-cross: true }
-          # - { target: i686-unknown-linux-musl     , os: ubuntu-20.04, use-cross: true }
-          # - { target: x86_64-apple-darwin         , os: macos-10.15                   }
-          # - { target: x86_64-pc-windows-gnu       , os: windows-2022                  }
-          # - { target: x86_64-pc-windows-msvc      , os: windows-2022                  }
-          # - { target: aarch64-pc-windows-msvc     , os: windows-11-arm                }
           - { target: x86_64-unknown-linux-gnu    , os: ubuntu-24.04                  }
-          # - { target: x86_64-unknown-linux-musl   , os: ubuntu-20.04, use-cross: true }
     steps:
     - name: Free Disk Space (Ubuntu)
       if: runner.os == 'Linux'
@@ -171,7 +140,6 @@ jobs:
                wget
             ;;
           # arm-unknown-linux-*) sudo apt-get -y update ; sudo apt-get -y install gcc-arm-linux-gnueabihf ;;
-          # aarch64-unknown-linux-gnu) sudo apt-get -y update ; sudo apt-get -y install gcc-aarch64-linux-gnu ;;
         esac
 
     - name: Setup vcpkg with Github Actions binary cache
@@ -188,7 +156,7 @@ jobs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
       with:
-        toolchain: stable
+        toolchain: ${{ env.RUST_VERSION }}
         targets: ${{ matrix.job.target }}
         components: ''
 
@@ -203,6 +171,12 @@ jobs:
         rustc -V
 
     - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+    - name: Check codec-only scrap build
+      shell: bash
+      run: |
+        cargo check --locked -p scrap --lib --no-default-features
+        cargo tree --locked -p scrap --no-default-features -e normal,build --prefix none
 
     - name: Build
       uses: actions-rs/cargo@844f36862e911db73fe0815f00a4a2602c279505 # v1
@@ -230,7 +204,6 @@ jobs:
     #     STRIP="strip"
     #     case ${{ matrix.job.target }} in
     #       arm-unknown-linux-*) STRIP="arm-linux-gnueabihf-strip" ;;
-    #       aarch64-unknown-linux-gnu) STRIP="aarch64-linux-gnu-strip" ;;
     #       *-pc-windows-msvc) STRIP="" ;;
     #     esac;
 
@@ -256,17 +229,7 @@ jobs:
       id: test-options
       shell: bash
       run: |
-        # test only library unit tests and binary for arm-type targets
-        unset CARGO_TEST_OPTIONS
-
-        case ${{ matrix.job.target }} in
-          arm-* | aarch64-*)
-            CARGO_TEST_OPTIONS="--lib --bin ${PROJECT_NAME}"
-            ;;
-          *)
-            CARGO_TEST_OPTIONS="--workspace --no-fail-fast"
-            ;;
-        esac;
+        CARGO_TEST_OPTIONS="--workspace --no-fail-fast"
 
         #deprecated echo ::set-output name=CARGO_TEST_OPTIONS::${CARGO_TEST_OPTIONS}
         echo "CARGO_TEST_OPTIONS=${CARGO_TEST_OPTIONS}" >> $GITHUB_ENV

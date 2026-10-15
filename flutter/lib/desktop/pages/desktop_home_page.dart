@@ -114,7 +114,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     if (isIncomingOnly) {
       children.addAll([
         Divider(),
-        OnlineStatusWidget(
+        ServiceStatusWidget(
           onSvcStatusChanged: () {
             if (isInHomePage()) {
               Future.delayed(Duration(milliseconds: 300), () {
@@ -211,7 +211,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          translate("ID"),
+                          translate("Local Address"),
                           style: TextStyle(
                               fontSize: 14,
                               color: Theme.of(context)
@@ -412,13 +412,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           ),
           if (!isOutgoingOnly)
             Text(
-              translate("desk_tip"),
+              translate('Connect using a LAN device, IP address, or hostname.'),
               overflow: TextOverflow.clip,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           if (isOutgoingOnly)
             Text(
-              translate("outgoing_only_desk_tip"),
+              translate('Connect using a LAN device, IP address, or hostname.'),
               overflow: TextOverflow.clip,
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -796,7 +796,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         await connectMainDesktop(
           call.arguments['id'],
           password: call.arguments['password'],
-          forceRelay: call.arguments['forceRelay'],
           connToken: call.arguments['connToken'],
         );
       } else if (call.method == kWindowBumpMouse) {

@@ -5,24 +5,18 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
-
 pub use connection::*;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::config::Config2;
-use hbb_common::tcp::{self, new_listener};
 use hbb_common::{
     allow_err,
     anyhow::Context,
     bail,
-    config::{Config, CONNECT_TIMEOUT, RELAY_PORT},
+    config::Config,
     log,
     protobuf::{Enum, Message as _},
-    rendezvous_proto::*,
-    socket_client,
-    sodiumoxide::crypto::{box_, sign},
+    rendezvous_proto::{ControlPermissions, ControlledContext},
     timeout, tokio,
-    websocket::{check_ws, is_ws_endpoint},
     ResultType, Stream,
 };
 use base::message_proto::*;
@@ -137,42 +131,10 @@ pub fn new() -> ServerPtr {
     Arc::new(RwLock::new(server))
 }
 
-async fn accept_connection_(
-    server: ServerPtr,
-    socket: Stream,
-    secure: bool,
-    meta: ConnectionMeta,
-    slot: crate::rendezvous_mediator::PunchSlot,
-) -> ResultType<()> {
-    let local_addr = socket.local_addr();
-    drop(socket);
-    // even we drop socket, below still may fail if not use reuse_addr,
-    // there is TIME_WAIT before socket really released, so sometimes we
-    // see "Only one usage of each socket address is normally permitted" on windows sometimes,
-    let listener = new_listener(local_addr, true).await?;
-    log::info!("Server listening on: {}", &listener.local_addr()?);
-    if let Ok((stream, addr)) = timeout(CONNECT_TIMEOUT, listener.accept()).await? {
-        // The peer is in: the place goes back before the session runs, as every punch's does.
-        drop(slot);
-        stream.set_nodelay(true).ok();
-        let stream_addr = stream.local_addr()?;
-        create_tcp_connection(
-            server,
-            Stream::from(stream, stream_addr),
-            addr,
-            secure,
-            meta,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
 pub async fn create_tcp_connection(
     server: ServerPtr,
     stream: Stream,
     addr: SocketAddr,
-    secure: bool,
     meta: ConnectionMeta,
 ) -> ResultType<()> {
     let mut stream = stream;
@@ -186,11 +148,19 @@ pub async fn create_tcp_connection(
     };
     // Before the handshake, so its read is bounded too; lifted again at authorization.
     stream.set_max_packet_length(MAX_UNAUTHORIZED_MESSAGE);
+    let (signing_secret, signing_public) = Config::get_key_pair();
+    let device_id = Config::get_id();
     tokio::select! {
-        handshake = identity_handshake(&mut stream, secure) => handshake?,
+        handshake = base::direct_transport::host::accept_handshake(
+            &mut stream, &signing_secret, &signing_public, &device_id,
+        ) => handshake?,
         _ = unauthorized.evicted() => {
             bail!("evicted to make room for a newer unauthenticated connection");
         }
+    }
+
+    if !stream.is_secured() {
+        bail!("Encrypted direct handshake is required");
     }
 
     #[cfg(target_os = "macos")]
@@ -217,170 +187,6 @@ pub async fn create_tcp_connection(
     Ok(())
 }
 
-/// Our signed identity goes out and, when `secure`, the controller's reply keys `stream`.
-/// Separate so it can be raced against the connection's eviction.
-async fn identity_handshake(stream: &mut Stream, secure: bool) -> ResultType<()> {
-    let (sk, pk) = Config::get_key_pair();
-    if secure && pk.len() == sign::PUBLICKEYBYTES && sk.len() == sign::SECRETKEYBYTES {
-        let mut sk_ = [0u8; sign::SECRETKEYBYTES];
-        sk_[..].copy_from_slice(&sk);
-        let sk = sign::SecretKey(sk_);
-        let mut msg_out = Message::new();
-        let (our_pk_b, our_sk_b) = box_::gen_keypair();
-        // On a WebRTC transport, bind our DTLS certificate fingerprint to our signed identity so
-        // the controller can verify the DTLS channel it negotiated actually terminates at us
-        // (not a rendezvous/relay that swapped the SDP fingerprint). Empty on other transports.
-        // Fail immediately on WebRTC if the local fingerprint is unavailable: signing "" would
-        // only make the client fail-closed after a wasted round-trip.
-        let dtls_fingerprint = stream.dtls_fingerprint(true).await.unwrap_or_default();
-        if stream.is_webrtc() && dtls_fingerprint.is_empty() {
-            bail!("WebRTC local DTLS fingerprint unavailable");
-        }
-        // A WebRTC stream is encrypted by DTLS and takes no stream key of its own, split or
-        // not, so what it advertises is what it runs: 0. Saying 1 there would have a future
-        // controller that splits keys on WebRTC agree on a version this side never applies.
-        let advertised = if stream.is_webrtc() {
-            0
-        } else {
-            tcp::KX_VERSION_LATEST
-        };
-        msg_out.set_signed_id(SignedId {
-            id: sign::sign(
-                &IdPk {
-                    id: Config::get_id(),
-                    pk: Bytes::from(our_pk_b.0.to_vec()),
-                    dtls_fingerprint,
-                    kx_version: advertised,
-                    ..Default::default()
-                }
-                .write_to_bytes()
-                .unwrap_or_default(),
-                &sk,
-            )
-            .into(),
-            ..Default::default()
-        });
-        timeout(CONNECT_TIMEOUT, stream.send(&msg_out)).await??;
-        match timeout(CONNECT_TIMEOUT, stream.next()).await? {
-            Some(res) => {
-                let bytes = res?;
-                if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
-                    if let Some(message::Union::PublicKey(pk)) = msg_in.union {
-                        if pk.asymmetric_value.len() == box_::PUBLICKEYBYTES {
-                            let key = tcp::Encrypt::decode(
-                                &pk.symmetric_value,
-                                &pk.asymmetric_value,
-                                &our_sk_b,
-                            )?;
-                            if pk.kx_version > advertised {
-                                bail!(
-                                    "Handshake failed: key exchange version {} not offered, {} was",
-                                    pk.kx_version,
-                                    advertised
-                                );
-                            }
-                            stream.set_negotiated_key(
-                                key,
-                                false,
-                                &tcp::KxTranscript {
-                                    initiator_pk: &pk.asymmetric_value,
-                                    responder_pk: &our_pk_b.0,
-                                    advertised,
-                                    picked: pk.kx_version,
-                                },
-                            )?;
-                        } else if pk.asymmetric_value.is_empty() {
-                            Config::set_key_confirmed(false);
-                            log::info!("Force to update pk");
-                        } else {
-                            bail!("Handshake failed: invalid public sign key length from peer");
-                        }
-                    } else {
-                        log::error!("Handshake failed: invalid message type");
-                    }
-                } else {
-                    bail!("Handshake failed: invalid message format");
-                }
-            }
-            None => {
-                bail!("Failed to receive public key");
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub(crate) async fn accept_connection(
-    server: ServerPtr,
-    socket: Stream,
-    peer_addr: SocketAddr,
-    secure: bool,
-    meta: ConnectionMeta,
-    slot: crate::rendezvous_mediator::PunchSlot,
-) {
-    if let Err(err) = accept_connection_(server, socket, secure, meta, slot).await {
-        log::warn!("Failed to accept connection from {}: {}", peer_addr, err);
-    }
-}
-
-pub async fn create_relay_connection(
-    server: ServerPtr,
-    relay_server: String,
-    uuid: String,
-    peer_addr: SocketAddr,
-    secure: bool,
-    ipv4: bool,
-    meta: ConnectionMeta,
-) {
-    if let Err(err) = create_relay_connection_(
-        server,
-        relay_server,
-        uuid.clone(),
-        peer_addr,
-        secure,
-        ipv4,
-        meta,
-    )
-    .await
-    {
-        log::error!(
-            "Failed to create relay connection for {} with uuid {}: {}",
-            peer_addr,
-            uuid,
-            err
-        );
-    }
-}
-
-async fn create_relay_connection_(
-    server: ServerPtr,
-    relay_server: String,
-    uuid: String,
-    peer_addr: SocketAddr,
-    secure: bool,
-    ipv4: bool,
-    meta: ConnectionMeta,
-) -> ResultType<()> {
-    // The proxy's address family does not constrain the relay target.
-    let relay_server = crate::check_port(relay_server, RELAY_PORT);
-    let use_ws_proxy = Config::is_proxy() && is_ws_endpoint(&check_ws(&relay_server));
-    let mut stream = socket_client::connect_tcp(
-        socket_client::ipv4_to_ipv6(relay_server, ipv4 || use_ws_proxy),
-        CONNECT_TIMEOUT,
-    )
-    .await?;
-    let mut msg_out = RendezvousMessage::new();
-    let licence_key = crate::get_key(true).await;
-    msg_out.set_request_relay(RequestRelay {
-        licence_key,
-        uuid,
-        ..Default::default()
-    });
-    stream.send(&msg_out).await?;
-    create_tcp_connection(server, stream, peer_addr, secure, meta).await?;
-    Ok(())
-}
 
 impl Server {
     fn is_video_service_name(name: &str) -> bool {
@@ -580,7 +386,7 @@ pub fn check_zombie() {
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[tokio::main]
 pub async fn start_server(_is_server: bool) {
-    crate::RendezvousMediator::start_all().await;
+    crate::DirectServer::start_all().await;
 }
 
 /// Start the host server that allows the remote peer to control the current machine.
@@ -643,7 +449,7 @@ pub async fn start_server(is_server: bool, no_server: bool) {
         crate::platform::try_kill_broker();
         #[cfg(feature = "hwcodec")]
         scrap::hwcodec::start_check_process();
-        crate::RendezvousMediator::start_all().await;
+        crate::DirectServer::start_all().await;
     } else {
         match crate::ipc::connect(1000, "").await {
             Ok(mut conn) => {
@@ -774,8 +580,6 @@ async fn sync_and_watch_config_dir(sync_done_tx: Option<tokio::sync::oneshot::Se
                                 Data::SyncConfig(Some(configs)) => {
                                     let (config, config2) = *configs;
                                     let _chk = crate::ipc::CheckIfRestart::new();
-                                    #[cfg(target_os = "macos")]
-                                    let _chk_pk = crate::CheckIfResendPk::new();
                                     if !config.is_empty() {
                                         if cfg0.0 != config {
                                             cfg0.0 = config.clone();

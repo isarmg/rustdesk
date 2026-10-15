@@ -573,6 +573,7 @@ fn run(vs: VideoService) -> ResultType<()> {
     let mut spf = video_qos.spf();
     let mut quality = video_qos.ratio();
     drop(video_qos);
+    let requested_codec = Encoder::negotiated_codec();
     let (mut encoder, encoder_cfg, codec_format, use_i444) = match setup_encoder(
         &c,
         sp.name(),
@@ -581,6 +582,11 @@ fn run(vs: VideoService) -> ResultType<()> {
     ) {
         Ok(result) => result,
         Err(err) => {
+            if !allow_software_encoder_fallback(requested_codec) {
+                return Err(anyhow!(
+                    "Failed to initialize {requested_codec:?} hardware encoder: {err:#}"
+                ));
+            }
             log::error!("Failed to create encoder: {err:?}, fallback to VP9");
             Encoder::set_fallback(&EncoderCfg::VPX(VpxEncoderConfig {
                 width: c.width as _,
@@ -922,17 +928,27 @@ fn setup_encoder(
     quality: f32,
     last_portable_service_running: bool,
 ) -> ResultType<(Encoder, EncoderCfg, CodecFormat, bool)> {
-    let encoder_cfg = get_encoder_config(
-        &c,
-        name.to_string(),
-        quality,
-        last_portable_service_running,
-    );
-    Encoder::set_fallback(&encoder_cfg);
-    let codec_format = Encoder::negotiated_codec();
+    let encoder_cfg =
+        get_encoder_config(&c, name.to_string(), quality, last_portable_service_running)?;
     let use_i444 = Encoder::use_i444(&encoder_cfg);
     let encoder = Encoder::new(encoder_cfg.clone(), use_i444)?;
+    Encoder::set_fallback(&encoder_cfg);
+    let codec_format = Encoder::negotiated_codec();
     Ok((encoder, encoder_cfg, codec_format, use_i444))
+}
+
+fn allow_software_encoder_fallback(format: CodecFormat) -> bool {
+    matches!(
+        format,
+        CodecFormat::VP8 | CodecFormat::VP9 | CodecFormat::AV1
+    )
+}
+
+fn require_hardware_encoder(
+    format: CodecFormat,
+    config: Option<EncoderCfg>,
+) -> ResultType<EncoderCfg> {
+    config.ok_or_else(|| anyhow!("No available hardware encoder for negotiated codec {format:?}"))
 }
 
 fn get_encoder_config(
@@ -940,46 +956,40 @@ fn get_encoder_config(
     _name: String,
     quality: f32,
     _portable_service: bool,
-) -> EncoderCfg {
+) -> ResultType<EncoderCfg> {
+    let negotiated_codec = Encoder::negotiated_codec();
     #[cfg(all(windows, feature = "vram"))]
     if _portable_service || c.is_gdi() {
         log::info!("gdi:{}, portable:{}", c.is_gdi(), _portable_service);
         VRamEncoder::set_not_use(_name, true);
     }
-    #[cfg(feature = "vram")]
-    Encoder::update(scrap::codec::EncodingUpdate::Check);
-    let negotiated_codec = Encoder::negotiated_codec();
-    match negotiated_codec {
+    // Resolve the codec already negotiated with peers; a transient unavailable
+    // backend must not silently replace the stream with a software codec.
+    Ok(match negotiated_codec {
         CodecFormat::H264 | CodecFormat::H265 => {
             #[cfg(feature = "vram")]
             if let Some(feature) = VRamEncoder::try_get(&c.device(), negotiated_codec) {
-                return EncoderCfg::VRAM(VRamEncoderConfig {
+                return Ok(EncoderCfg::VRAM(VRamEncoderConfig {
                     device: c.device(),
                     width: c.width,
                     height: c.height,
                     quality,
                     feature,
                     keyframe_interval: None,
-                });
+                }));
             }
             #[cfg(feature = "hwcodec")]
             if let Some(hw) = HwRamEncoder::try_get(negotiated_codec) {
-                return EncoderCfg::HWRAM(HwRamEncoderConfig {
+                return Ok(EncoderCfg::HWRAM(HwRamEncoderConfig {
                     name: hw.name,
                     mc_name: hw.mc_name,
                     width: c.width,
                     height: c.height,
                     quality,
                     keyframe_interval: None,
-                });
+                }));
             }
-            EncoderCfg::VPX(VpxEncoderConfig {
-                width: c.width as _,
-                height: c.height as _,
-                quality,
-                codec: VpxVideoCodecId::VP9,
-                keyframe_interval: None,
-            })
+            return require_hardware_encoder(negotiated_codec, None);
         }
         format @ (CodecFormat::VP8 | CodecFormat::VP9) => EncoderCfg::VPX(VpxEncoderConfig {
             width: c.width as _,
@@ -1005,7 +1015,7 @@ fn get_encoder_config(
             codec: VpxVideoCodecId::VP9,
             keyframe_interval: None,
         }),
-    }
+    })
 }
 
 #[cfg(target_os = "android")]
@@ -1356,6 +1366,24 @@ mod tests {
         sync::{mpsc, Arc, Mutex},
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn hardware_encoder_failure_does_not_allow_software_fallback() {
+        for codec in [scrap::CodecFormat::H264, scrap::CodecFormat::H265] {
+            assert!(!super::allow_software_encoder_fallback(codec));
+        }
+        assert!(super::allow_software_encoder_fallback(
+            scrap::CodecFormat::VP9
+        ));
+    }
+
+    #[test]
+    fn unavailable_hardware_encoder_reports_requested_codec() {
+        for codec in [scrap::CodecFormat::H264, scrap::CodecFormat::H265] {
+            let error = super::require_hardware_encoder(codec, None).unwrap_err();
+            assert!(error.to_string().contains(&format!("{codec:?}")));
+        }
+    }
 
     #[tokio::test]
     async fn frame_notifications_drain_without_creating_a_runtime() {

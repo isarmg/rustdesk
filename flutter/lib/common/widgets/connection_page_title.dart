@@ -20,7 +20,7 @@ Widget getConnectionPageTitle(BuildContext context, bool isWeb) {
           ).marginOnly(right: 4),
           Tooltip(
             waitDuration: Duration(milliseconds: 300),
-            message: translate(isWeb ? "web_id_input_tip" : "id_input_tip"),
+            message: translate('Enter an IP address or hostname, with an optional port. Use [IPv6]:port for IPv6.'),
             child: Icon(
               Icons.help_outline_outlined,
               size: 16,

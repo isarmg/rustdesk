@@ -10,6 +10,7 @@
 #include "win32_desktop.h"
 #include "flutter_window.h"
 #include "utils.h"
+#include "../../../src/platform/windows_supported.h"
 
 typedef char** (*FUNC_RUSTDESK_CORE_MAIN)(int*);
 typedef void (*FUNC_RUSTDESK_FREE_ARGS)( char**, int);
@@ -23,6 +24,11 @@ const wchar_t* getWindowClassName();
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command)
 {
+  if (!rustdesk_supported_windows()) {
+    MessageBoxW(nullptr, L"RustDesk requires Windows 11 (build 22000 or newer) on x86_64.",
+                L"Unsupported Windows version", MB_OK | MB_ICONERROR);
+    return EXIT_FAILURE;
+  }
   HINSTANCE hInstance = LoadLibraryA("librustdesk.dll");
   if (!hInstance)
   {

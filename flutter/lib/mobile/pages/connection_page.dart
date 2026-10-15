@@ -174,18 +174,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
                           hostname: '',
                           alias: '',
                           platform: '',
-                          forceAlwaysRelay: false,
                         );
                         _autocompleteOpts = [emptyPeer];
                       } else {
-                        String textWithoutSpaces =
-                            textEditingValue.text.replaceAll(" ", "");
-                        if (int.tryParse(textWithoutSpaces) != null) {
-                          textEditingValue = TextEditingValue(
-                            text: textWithoutSpaces,
-                            selection: textEditingValue.selection,
-                          );
-                        }
                         String textToFind = textEditingValue.text.toLowerCase();
 
                         _autocompleteOpts = _allPeersLoader.peers
@@ -199,7 +190,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
                                     .contains(textToFind) ||
                                 peer.alias.toLowerCase().contains(textToFind))
                             .toList();
-                        _allPeersLoader.queryOnlines(_autocompleteOpts);
                       }
                       return _autocompleteOpts;
                     },
@@ -229,8 +219,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                           color: MyTheme.idColor,
                         ),
                         decoration: InputDecoration(
-                          labelText: translate('Remote ID'),
-                          // hintText: 'Enter your remote ID',
+                          labelText: translate('Enter IP address or hostname'),
                           border: InputBorder.none,
                           helperStyle: const TextStyle(
                             fontWeight: FontWeight.bold,

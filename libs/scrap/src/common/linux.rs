@@ -1,6 +1,6 @@
 use crate::{
     common::{wayland, TraitCapturer},
-    Frame, Pixfmt, TraitPixelBuffer,
+    Frame,
 };
 use std::{io, time::Duration};
 
@@ -105,50 +105,5 @@ impl Display {
         match self {
             Display::WAYLAND(d) => d.name(),
         }
-    }
-}
-
-pub struct PixelBuffer<'a> {
-    data: &'a [u8],
-    pixfmt: Pixfmt,
-    width: usize,
-    height: usize,
-    stride: Vec<usize>,
-}
-
-impl<'a> PixelBuffer<'a> {
-    pub fn new(data: &'a [u8], pixfmt: Pixfmt, width: usize, height: usize) -> Self {
-        let stride0 = data.len() / height;
-        let mut stride = Vec::new();
-        stride.push(stride0);
-        Self {
-            data,
-            pixfmt,
-            width,
-            height,
-            stride,
-        }
-    }
-}
-
-impl<'a> TraitPixelBuffer for PixelBuffer<'a> {
-    fn data(&self) -> &[u8] {
-        self.data
-    }
-
-    fn width(&self) -> usize {
-        self.width
-    }
-
-    fn height(&self) -> usize {
-        self.height
-    }
-
-    fn stride(&self) -> Vec<usize> {
-        self.stride.clone()
-    }
-
-    fn pixfmt(&self) -> crate::Pixfmt {
-        self.pixfmt
     }
 }

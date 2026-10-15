@@ -12,12 +12,7 @@
 #include <string>
 
 extern "C" bool CanUseNewApiForScreenCaptureCheck() {
-    #ifdef NO_InputMonitoringAuthStatus
-    return false;
-    #else
-    NSOperatingSystemVersion version = [[NSProcessInfo processInfo] operatingSystemVersion];
-    return version.majorVersion >= 11;
-    #endif
+    return true;
 }
 
 extern "C" uint32_t majorVersion() {
@@ -26,53 +21,41 @@ extern "C" uint32_t majorVersion() {
 }
 
 extern "C" bool IsCanScreenRecording(bool prompt) {
-    #ifdef NO_InputMonitoringAuthStatus
-    return false;
-    #else
     bool res = CGPreflightScreenCaptureAccess();
     if (!res && prompt) {
         CGRequestScreenCaptureAccess();
     }
     return res;
-    #endif
 }
 
 
 // https://github.com/codebytere/node-mac-permissions/blob/main/permissions.mm
 
 extern "C" bool InputMonitoringAuthStatus(bool prompt) {
-    #ifdef NO_InputMonitoringAuthStatus
-    return true;
-    #else
-    if (floor(NSAppKitVersionNumber) >= NSAppKitVersionNumber10_15) {
-        IOHIDAccessType theType = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
-        NSLog(@"IOHIDCheckAccess = %d, kIOHIDAccessTypeGranted = %d", theType, kIOHIDAccessTypeGranted);
-        switch (theType) {
-            case kIOHIDAccessTypeGranted:
-                return true;
-                break;
-            case kIOHIDAccessTypeDenied: {
-                if (prompt) {
-                    NSString *urlString = @"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
-                    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:urlString]];
-                }
-                break;
+    IOHIDAccessType theType = IOHIDCheckAccess(kIOHIDRequestTypeListenEvent);
+    NSLog(@"IOHIDCheckAccess = %d, kIOHIDAccessTypeGranted = %d", theType, kIOHIDAccessTypeGranted);
+    switch (theType) {
+        case kIOHIDAccessTypeGranted:
+            return true;
+            break;
+        case kIOHIDAccessTypeDenied: {
+            if (prompt) {
+                NSString *urlString = @"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
+                [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:urlString]];
             }
-            case kIOHIDAccessTypeUnknown: {
-                if (prompt) {
-                    bool result = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
-                    NSLog(@"IOHIDRequestAccess result = %d", result);
-                }
-                break;
-            }
-            default:
-                break;
+            break;
         }
-    } else {
-        return true;
+        case kIOHIDAccessTypeUnknown: {
+            if (prompt) {
+                bool result = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent);
+                NSLog(@"IOHIDRequestAccess result = %d", result);
+            }
+            break;
+        }
+        default:
+            break;
     }
     return false;
-    #endif
 }
 
 extern "C" bool Elevate(char* process, char** args) {

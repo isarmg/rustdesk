@@ -42,7 +42,7 @@ const String kPeerPlatformWebDesktop = "WebDesktop";
 
 const double kScrollbarThickness = 12.0;
 
-/// [kAppTypeMain] used by 'Desktop Main Page' , 'Mobile (Client and Server)', "Install Page"
+/// [kAppTypeMain] used by 'Desktop Main Page', 'Mobile Client', "Install Page"
 const String kAppTypeMain = "main";
 
 /// [kAppTypeConnectionManager] only for 'Desktop CM Page'
@@ -91,14 +91,12 @@ const String kOptionTextureRender = "use-texture-render";
 const String kOptionD3DRender = "allow-d3d-render";
 const String kOptionOpenInTabs = "allow-open-in-tabs";
 const String kOptionOpenInWindows = "allow-open-in-windows";
-const String kOptionForceAlwaysRelay = "force-always-relay";
 const String kOptionViewOnly = "view_only";
 const String kOptionEnableLanDiscovery = "enable-lan-discovery";
 const String kOptionWhitelist = "whitelist";
 const String kOptionIdWhitelist = "id-whitelist";
 const String kOptionEnableAbr = "enable-abr";
 
-const String kOptionDirectServer = "direct-server";
 const String kOptionDirectAccessPort = "direct-access-port";
 const String kOptionAllowAutoDisconnect = "allow-auto-disconnect";
 const String kOptionAutoDisconnectTimeout = "auto-disconnect-timeout";
@@ -175,13 +173,8 @@ const String kOptionAllowRemoveWallpaper = "allow-remove-wallpaper";
 const String kOptionStopService = "stop-service";
 const String kOptionDirectxCapture = "enable-directx-capture";
 const String kOptionAllowRemoteCmModification = "allow-remote-cm-modification";
-const String kOptionEnableTcpPunch = "enable-tcp-punch";
-const String kOptionEnableUdpPunch = "enable-udp-punch";
-const String kOptionEnableIpv6Punch = "enable-ipv6-punch";
 const String kOptionAllowSyncClipboardBetweenSessions =
     "allow-sync-clipboard-between-sessions";
-const String kOptionEnableWebrtc = "enable-webrtc";
-const String kOptionRelayFallbackDelay = "relay-fallback-delay";
 const String kOptionEnableTrustedDevices = "enable-trusted-devices";
 const String kOptionShowVirtualMouse = "show-virtual-mouse";
 const String kOptionVirtualMouseScale = "virtual-mouse-scale";
@@ -192,38 +185,24 @@ const String kOptionAllowMonitorSwitchMinToolbar = "allow-monitor-switch-min-too
 
 
 // network options
-const String kOptionAllowWebSocket = "allow-websocket";
-const String kOptionAllowInsecureTLSFallback = "allow-insecure-tls-fallback";
-const String kOptionDisableUdp = "disable-udp";
 const String kOptionEnableFlutterHttpOnRust = "enable-flutter-http-on-rust";
 
 // builtin options
-const String kOptionHideServerSetting = "hide-server-settings";
-const String kOptionHideProxySetting = "hide-proxy-settings";
-const String kOptionHideWebSocketSetting = "hide-websocket-settings";
 const String kOptionHideStopService = "hide-stop-service";
 
 const String kOptionHideGeneralSetting = "hide-general-settings";
 const String kOptionHideSecuritySetting = "hide-security-settings";
-const String kOptionHideNetworkSetting = "hide-network-settings";
 const String kOptionRemovePresetPasswordWarning =
     "remove-preset-password-warning";
 const String kOptionDisableChangePermanentPassword =
     "disable-change-permanent-password";
-const String kOptionDisableChangeId = "disable-change-id";
 const String kOptionDisableUnlockPin = "disable-unlock-pin";
 const kHideUsernameOnCard = "hide-username-on-card";
 const String kOptionHideHelpCards = "hide-help-cards";
 const String kOptionAllowDeepLinkPassword = "allow-deep-link-password";
-const String kOptionAllowDeepLinkServerSettings =
-    "allow-deep-link-server-settings";
 
 const String kOptionToggleViewOnly = "view-only";
 const String kOptionToggleShowMyCursor = "show-my-cursor";
-
-const String kOptionDisableFloatingWindow = "disable-floating-window";
-
-const String kOptionKeepScreenOn = "keep-screen-on";
 
 const String kOptionKeepAwakeDuringIncomingSessions = "keep-awake-during-incoming-sessions";
 const String kOptionKeepAwakeDuringOutgoingSessions = "keep-awake-during-outgoing-sessions";
@@ -446,23 +425,8 @@ const Duration kDebounceCustomScaleDuration = Duration(milliseconds: 300);
 const kMobileDelaySoftKeyboard = Duration(milliseconds: 30);
 const kMobileDelaySoftKeyboardFocus = Duration(milliseconds: 30);
 
-/// Android constants
-const kActionApplicationDetailsSettings =
-    "android.settings.APPLICATION_DETAILS_SETTINGS";
-const kActionAccessibilitySettings = "android.settings.ACCESSIBILITY_SETTINGS";
-
-const kRecordAudio = "android.permission.RECORD_AUDIO";
-const kRequestIgnoreBatteryOptimizations =
-    "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS";
-const kSystemAlertWindow = "android.permission.SYSTEM_ALERT_WINDOW";
-const kAndroid13Notification = "android.permission.POST_NOTIFICATIONS";
-
 /// Android channel invoke type key
 class AndroidChannel {
-  static final kStartAction = "start_action";
-  static final kGetStartOnBootOpt = "get_start_on_boot_opt";
-  static final kSetStartOnBootOpt = "set_start_on_boot_opt";
-  static final kSyncAppDirConfigPath = "sync_app_dir";
   static final kPickImportDirectory = "pick_import_directory";
   static final kImportDirectory = "import_directory";
 }

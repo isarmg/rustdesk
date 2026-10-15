@@ -26,7 +26,6 @@ pub mod action_id {
     pub const INSERT_LOCK: &str          = "insert_lock";
     pub const REFRESH: &str              = "refresh";
     pub const TOGGLE_BLOCK_INPUT: &str   = "toggle_block_input";
-    pub const SWITCH_SIDES: &str         = "switch_sides";
     pub const CLOSE_TAB: &str            = "close_tab";
     pub const TOGGLE_TOOLBAR: &str       = "toggle_toolbar";
     pub const RESTART_REMOTE: &str       = "restart_remote";
@@ -281,7 +280,7 @@ fn action_available_on_platform(action: &str, platform: &str, is_wayland: bool) 
     match action {
         action_id::TOGGLE_RELATIVE_MOUSE_MODE => !mobile && !is_wayland,
         action_id::TOGGLE_FULLSCREEN | action_id::SCREENSHOT | action_id::SWITCH_TAB_NEXT
-        | action_id::SWITCH_TAB_PREV | action_id::CLOSE_TAB | action_id::SWITCH_SIDES
+        | action_id::SWITCH_TAB_PREV | action_id::CLOSE_TAB
         | action_id::TOGGLE_TOOLBAR | action_id::PIN_TOOLBAR | action_id::SWITCH_DISPLAY_ALL
         | action_id::KEYBOARD_MODE_MAP
         | action_id::KEYBOARD_MODE_TRANSLATE | action_id::KEYBOARD_MODE_LEGACY
@@ -289,7 +288,7 @@ fn action_available_on_platform(action: &str, platform: &str, is_wayland: bool) 
         action_id::RESET_CANVAS => mobile,
         // Ignore bindings persisted by versions with removed session features.
         "toggle_chat" | "toggle_voice_call" | "toggle_recording"
-        | "toggle_enable_file_copy_paste" => false,
+        | "toggle_enable_file_copy_paste" | "switch_sides" => false,
         _ => true,
     }
 }
@@ -387,7 +386,6 @@ const RELEASE_ACTION_IDS: &[&str] = &[
     action_id::SWITCH_TAB_NEXT,
     action_id::SWITCH_TAB_PREV,
     action_id::RESTART_REMOTE,
-    action_id::SWITCH_SIDES,
 ];
 
 pub fn runs_on_release(action_id: &str) -> bool {
@@ -990,7 +988,7 @@ mod tests {
     fn removed_saved_actions_do_not_consume_shortcuts() {
         let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for action in ["toggle_chat", "toggle_voice_call", "toggle_recording",
-            "toggle_enable_file_copy_paste"] {
+            "toggle_enable_file_copy_paste", "switch_sides"] {
             let saved = Bindings { enabled: true, pass_through: false,
                 bindings: vec![Binding {
                     action: action.into(), mods: vec![Modifier::Primary], key: "c".into(),

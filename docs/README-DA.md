@@ -2,7 +2,6 @@
   <img src="../res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#gratis-offentlige-servere">Servere</a> •
   <a href="#rå-trin-til-at-bygge">Byg</a> •
-  <a href="#sådan-bygger-du-med-docker">Docker</a> •
   <a href="#filstruktur">Filstruktur</a> •
   <a href="#skærmbilleder">Skærmbilleder</a><br>
   [<a href="../README.md">English</a>] | [<a href="README-UA.md">Українська</a>] | [<a href="README-CS.md">česky</a>] | [<a href="README-ZH.md">中文</a>] | [<a href="README-HU.md">Magyar</a>] | [<a href="README-ES.md">Español</a>] | [<a href="README-FA.md">فارسی</a>] | [<a href="README-FR.md">Français</a>] | [<a href="README-DE.md">Deutsch</a>] | [<a href="README-PL.md">Polski</a>] | [<a href="README-ID.md">Indonesian</a>] | [<a href="README-FI.md">Suomi</a>] | [<a href="README-ML.md">മലയാളം</a>] | [<a href="README-JP.md">日本語</a>] | [<a href="README-NL.md">Nederlands</a>] | [<a href="README-IT.md">Italiano</a>] | [<a href="README-RU.md">Русский</a>] | [<a href="README-PTBR.md">Português (Brasil)</a>] | [<a href="README-EO.md">Esperanto</a>] | [<a href="README-KR.md">한국어</a>] | [<a href="README-AR.md">العربي</a>] | [<a href="README-VN.md">Tiếng Việt</a>] | [<a href="README-GR.md">Ελληνικά</a>]<br>
@@ -100,32 +99,9 @@ mv libsciter-gtk.so target/debug
 cargo run
 ```
 
-## Sådan bygger du med Docker
+## Native deployment
 
-```sh
-git clone https://github.com/rustdesk/rustdesk
-cd rustdesk
-docker build -t "rustdesk-builder" .
-```
-
-Kør derefter følgende kommando, hver gang du skal bygge applikationen:
-```sh
-docker run --rm -it -v $PWD:/home/user/rustdesk -v rustdesk-git-cache:/home/user/.cargo/git -v rustdesk-registry-cache:/home/user/.cargo/registry -e PUID="$(id -u)" -e PGID="$(id -g)" rustdesk-builder
-```
-
-Bemærk, at den første bygning kan tage længere tid, før afhængigheder cachelagres, efterfølgende bygninger vil være hurtigere. Derudover, hvis du har brug for at angive forskellige argumenter til bygge-kommandoen, kan du gøre det i slutningen af kommandoen i `<VALGFRI-ARGS>`-positionen. For eksempel, hvis du ville bygge en optimeret udgivelsesversion, ville du køre kommandoen ovenfor efterfulgt af `--release`. Den resulterende eksekverbare vil være tilgængelig i målmappen på dit system og kan køres med:
-
-```sh
-target/debug/rustdesk
-```
-
-Eller, hvis du kører en udgivelses eksekverbar:
-
-```sh
-target/release/rustdesk
-```
-
-Sørg for, at du kører disse kommandoer fra roden af RustDesk-lageret, ellers kan applikationen muligvis ikke finde de nødvendige ressourcer. Bemærk også, at andre cargo underkommandoer såsom 'install' eller 'run' i øjeblikket ikke understøttes via denne metode, da de ville installere eller køre programmet inde i containeren i stedet for værten.
+For this fork, follow the [native build and deployment instructions](../README.md#编译部署) and [pinned toolchain](BUILD-TOOLCHAIN.md). Applications run natively on physical devices.
 
 ## Filstruktur
 

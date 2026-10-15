@@ -4,10 +4,10 @@ use hbb_common::{bail, log, ResultType};
 use std::{ffi::c_void, slice};
 
 cfg_if! {
-    if #[cfg(quartz)] {
+    if #[cfg(all(feature = "capture", quartz))] {
         mod quartz;
         pub use self::quartz::*;
-    } else if #[cfg(target_os = "linux")] {
+    } else if #[cfg(all(feature = "capture", target_os = "linux"))] {
         #[cfg(not(feature = "wayland"))]
         compile_error!("Linux screen capture requires the wayland feature");
         #[cfg(feature = "wayland")]
@@ -24,16 +24,20 @@ cfg_if! {
         pub use self::linux::*;
         #[cfg(feature = "wayland")]
         pub use self::wayland::set_map_err;
-    } else if #[cfg(dxgi)] {
+    } else if #[cfg(all(feature = "capture", dxgi))] {
         mod dxgi;
         pub use self::dxgi::*;
-    } else if #[cfg(target_os = "android")] {
-        mod android;
-        pub use self::android::*;
     }else {
         //TODO: Fallback implementation.
     }
 }
+
+// A real borrowed pixel buffer is available without any screen-capture backend.
+// Linux capture uses the same representation; other backends own native frames.
+#[cfg(any(target_os = "linux", target_os = "android", not(feature = "capture")))]
+mod pixelbuffer;
+#[cfg(any(target_os = "linux", target_os = "android", not(feature = "capture")))]
+pub use self::pixelbuffer::PixelBuffer;
 
 pub mod codec;
 pub mod convert;
@@ -123,6 +127,7 @@ pub fn would_block_if_equal(old: &mut Vec<u8>, b: &[u8]) -> std::io::Result<()> 
     Ok(())
 }
 
+#[cfg(feature = "capture")]
 pub trait TraitCapturer {
     // We doesn't support
     #[cfg(not(any(target_os = "ios")))]
@@ -169,13 +174,13 @@ pub trait TraitPixelBuffer {
     fn pixfmt(&self) -> Pixfmt;
 }
 
-#[cfg(not(any(target_os = "ios")))]
+#[cfg(all(feature = "capture", not(target_os = "ios")))]
 pub enum Frame<'a> {
     PixelBuffer(PixelBuffer<'a>),
     Texture((*mut c_void, usize)),
 }
 
-#[cfg(not(any(target_os = "ios")))]
+#[cfg(all(feature = "capture", not(target_os = "ios")))]
 impl Frame<'_> {
     pub fn valid<'a>(&'a self) -> bool {
         match self {
@@ -516,12 +521,12 @@ pub trait GoogleImage {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "capture", target_os = "android"))]
 pub fn screen_size() -> (u16, u16, u16) {
     SCREEN_SIZE.lock().unwrap().clone()
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(feature = "capture", target_os = "android"))]
 pub fn is_start() -> Option<bool> {
     android::is_start()
 }

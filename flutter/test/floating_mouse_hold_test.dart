@@ -1,14 +1,22 @@
-@TestOn('browser')
-
 import 'dart:async';
-import 'dart:js' as js;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/widgets/remote_input.dart';
 import 'package:flutter_hbb/mobile/widgets/floating_mouse_widgets.dart';
+import 'package:flutter_hbb/generated_bridge.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/input_model.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+class _Binding extends Fake implements RustdeskImpl {
+  @override
+  String getLocalFlutterOption({required String k, dynamic hint}) => '';
+
+  @override
+  Future<void> setLocalFlutterOption(
+      {required String k, required String v, dynamic hint}) async {}
+}
 
 class _Input extends Fake implements InputModel {
   final events = <(String, MouseButtons)>[];
@@ -38,16 +46,10 @@ class _Cursor extends CursorModel {
 void main() {
   setUp(() {
     isSpecialHoldDragActive = false;
-    js.context['isMobile'] = js.allowInterop(() => true);
-    js.context['getByName'] =
-        js.allowInterop((String name, [String? key]) => '');
-    js.context['setByName'] = js.allowInterop((String name, dynamic value) {});
+    platformFFI.setBindingForTesting(_Binding());
   });
   tearDown(() {
     isSpecialHoldDragActive = false;
-    for (final name in ['isMobile', 'getByName', 'setByName']) {
-      js.context.deleteProperty(name);
-    }
   });
 
   for (final end in ['release', 'cancel', 'dispose']) {

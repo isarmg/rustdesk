@@ -9,7 +9,6 @@ const kShortcutActionScreenshot = 'screenshot';
 const kShortcutActionInsertLock = 'insert_lock';
 const kShortcutActionRefresh = 'refresh';
 const kShortcutActionToggleBlockInput = 'toggle_block_input';
-const kShortcutActionSwitchSides = 'switch_sides';
 const kShortcutActionCloseTab = 'close_tab';
 const kShortcutActionToggleToolbar = 'toggle_toolbar';
 const kShortcutActionRestartRemote = 'restart_remote';
@@ -29,7 +28,6 @@ const kShortcutActionsRunOnKeyUp = {
   kShortcutActionSwitchTabNext,
   kShortcutActionSwitchTabPrev,
   kShortcutActionRestartRemote,
-  kShortcutActionSwitchSides,
 };
 const kShortcutActionToggleMute = 'toggle_mute';
 const kShortcutActionPinToolbar = 'pin_toolbar';
@@ -79,13 +77,9 @@ const kShortcutLocalConfigKey = 'keyboard-shortcuts';
 const kShortcutEventName = 'shortcut_triggered';
 
 /// Canonical default keyboard-shortcut bindings, mirroring Rust's
-/// `default_bindings()` in `src/keyboard/shortcuts.rs`. Used by:
-///   * the Web bridge (`flutter/lib/web/bridge.dart::mainGetDefaultKeyboardShortcuts`)
-///     — Web has no Rust at runtime, so the seed list is read from this Dart
-///     constant instead of going through FFI.
-///   * the configuration page when seeding defaults on first enable, after
-///     [filterDefaultBindingsForPlatform] has trimmed platform-specific
-///     entries.
+/// `default_bindings()` in `src/keyboard/shortcuts.rs`. Used by the configuration
+/// page when seeding defaults on first enable, after
+/// [filterDefaultBindingsForPlatform] has trimmed platform-specific entries.
 ///
 /// Parity with Rust is unit-tested on both sides against
 /// `flutter/test/fixtures/default_keyboard_shortcuts.json` — see the

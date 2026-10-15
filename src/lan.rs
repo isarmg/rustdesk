@@ -3,8 +3,7 @@ use hbb_common::whoami;
 use hbb_common::{
     allow_err,
     anyhow::bail,
-    config::Config,
-    config::{self, RENDEZVOUS_PORT},
+    config::{self, Config},
     log,
     protobuf::Message as _,
     rendezvous_proto::*,
@@ -23,7 +22,7 @@ use std::{
 
 type Message = RendezvousMessage;
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(super) fn start_listening() -> ResultType<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], get_broadcast_port()));
     let socket = std::net::UdpSocket::bind(addr)?;
@@ -36,6 +35,7 @@ pub(super) fn start_listening() -> ResultType<()> {
                 match msg_in.union {
                     Some(rendezvous_message::Union::PeerDiscovery(p)) => {
                         if p.cmd == "ping"
+                            && crate::direct_server::direct_server_running()
                             && config::option2bool(
                                 "enable-lan-discovery",
                                 &Config::get_option("enable-lan-discovery"),
@@ -59,6 +59,9 @@ pub(super) fn start_listening() -> ResultType<()> {
                                     hostname,
                                     username: crate::platform::get_active_username(),
                                     platform: whoami::platform().to_string(),
+                                    misc: serde_json::json!({
+                                        "direct_port": crate::direct_server::get_direct_port()
+                                    }).to_string(),
                                     ..Default::default()
                                 };
                                 msg_out.set_peer_discovery(peer);
@@ -86,7 +89,7 @@ pub async fn discover() -> ResultType<()> {
 pub fn send_wol(id: String) {
     let interfaces = default_net::get_interfaces();
     for peer in &config::LanPeers::load().peers {
-        if peer.id == id {
+        if peer.id == id || peer_endpoint(peer).as_deref() == Some(id.as_str()) {
             for (_, mac) in peer.ip_mac.iter() {
                 if let Ok(mac_addr) = mac.parse() {
                     for interface in &interfaces {
@@ -104,9 +107,31 @@ pub fn send_wol(id: String) {
     }
 }
 
+pub(crate) fn peer_endpoint(peer: &config::DiscoveryPeer) -> Option<String> {
+    peer.ip_mac
+        .keys()
+        .filter_map(|address| {
+            address.parse::<SocketAddr>().ok().or_else(|| {
+                address.parse::<IpAddr>().ok().map(|ip| SocketAddr::new(ip, 21118))
+            })
+        })
+        .filter(|address| address.port() != 0 && !address.ip().is_unspecified() && !address.ip().is_multicast())
+        .map(|address| address.to_string())
+        .min()
+}
+
+fn discovery_port(misc: &str) -> u16 {
+    serde_json::from_str::<serde_json::Value>(misc)
+        .ok()
+        .and_then(|value| value.get("direct_port")?.as_u64())
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(21118)
+}
+
 #[inline]
 fn get_broadcast_port() -> u16 {
-    (RENDEZVOUS_PORT + 3) as _
+    21119
 }
 
 fn get_mac(_ip: &IpAddr) -> String {
@@ -273,9 +298,10 @@ fn wait_response(
                             if local_mac.is_empty() && p.mac.is_empty() || local_mac != p.mac {
                                 allow_err!(tx.send(config::DiscoveryPeer {
                                     id: p.id.clone(),
-                                    ip_mac: HashMap::from([
-                                        (addr.ip().to_string(), p.mac.clone(),)
-                                    ]),
+                                    ip_mac: HashMap::from([(
+                                        SocketAddr::new(addr.ip(), discovery_port(&p.misc)).to_string(),
+                                        p.mac.clone(),
+                                    )]),
                                     username: p.username.clone(),
                                     hostname: p.hostname.clone(),
                                     platform: p.platform.clone(),
@@ -349,4 +375,37 @@ async fn handle_received_peers(mut rx: UnboundedReceiver<config::DiscoveryPeer>)
     #[cfg(feature = "flutter")]
     crate::flutter_ffi::main_load_lan_peers();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_endpoint_uses_observed_address_and_advertised_port() {
+        let source: SocketAddr = "192.168.1.10:21119".parse().unwrap();
+        let port = discovery_port(r#"{"direct_port":23000,"host":"untrusted.example"}"#);
+        let peer = config::DiscoveryPeer {
+            id: "device-id".to_owned(),
+            ip_mac: HashMap::from([(
+                SocketAddr::new(source.ip(), port).to_string(),
+                String::new(),
+            )]),
+            ..Default::default()
+        };
+        assert_eq!(peer_endpoint(&peer).as_deref(), Some("192.168.1.10:23000"));
+        assert_eq!(discovery_port(r#"{"direct_port":0}"#), 21118);
+        assert_eq!(discovery_port(r#"{"direct_port":65536}"#), 21118);
+    }
+
+    #[test]
+    fn discovery_endpoint_preserves_ipv6_and_supports_cached_bare_ip() {
+        let mut peer = config::DiscoveryPeer {
+            ip_mac: HashMap::from([("[2001:db8::5]:23000".to_owned(), String::new())]),
+            ..Default::default()
+        };
+        assert_eq!(peer_endpoint(&peer).as_deref(), Some("[2001:db8::5]:23000"));
+        peer.ip_mac = HashMap::from([("192.168.1.10".to_owned(), String::new())]);
+        assert_eq!(peer_endpoint(&peer).as_deref(), Some("192.168.1.10:21118"));
+    }
 }

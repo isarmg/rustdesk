@@ -148,15 +148,6 @@ pub fn cpu_uage_one_minute() -> Option<f64> {
     None
 }
 
-pub fn sync_cpu_usage(cpu_usage: Option<f64>) {
-    let v = match cpu_usage {
-        Some(cpu_usage) => Some((cpu_usage, Instant::now())),
-        None => None,
-    };
-    *CPU_USAGE_ONE_MINUTE.lock().unwrap() = v;
-    log::info!("cpu usage synced: {:?}", cpu_usage);
-}
-
 // https://learn.microsoft.com/en-us/windows/win32/sysinfo/targeting-your-application-at-windows-8-1
 // https://github.com/nodejs/node-convergence-archive/blob/e11fe0c2777561827cdb7207d46b0917ef3c42a7/deps/uv/src/win/util.c#L780
 pub fn is_windows_version_or_greater(

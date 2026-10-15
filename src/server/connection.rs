@@ -13,6 +13,10 @@ use crate::{display_service, ipc, privacy_mode, video_service, VERSION};
 use base::{
     config::keys,
     message_proto::{option_message::BoolOption, permission_info::Permission},
+    session_protocol::{
+        LOGIN_MSG_2FA_WRONG, LOGIN_MSG_NO_PASSWORD_ACCESS, LOGIN_MSG_OFFLINE, LOGIN_MSG_PASSWORD_WRONG,
+        LOGIN_SCREEN_WAYLAND, REQUIRE_2FA,
+    },
 };
 use cidr_utils::cidr::IpCidr;
 #[cfg(target_os = "android")]
@@ -68,7 +72,7 @@ const MAX_UNAUTHORIZED_CONNS: usize = 64;
 /// Of those, how many one address may hold at once: a quarter of the room. A fairness cap
 /// against the cheapest flood, one host with one address, not a security boundary: any pool
 /// of addresses passes it, and the bound above is what holds. Meaningful only while the
-/// address is the controller's own, which punch and relay messages carry today.
+/// address is the controller's directly connected source address.
 const MAX_UNAUTHORIZED_CONNS_PER_ADDR: usize = 16;
 /// The largest message a connection may send before it authorizes. Until then a peer sends only
 /// a public key, a login request, a test delay and a close reason, none of which carries an
@@ -173,17 +177,6 @@ lazy_static::lazy_static! {
     pub static ref CONTROL_PERMISSIONS_ARRAY: Arc::<Mutex<Vec<(i32, ControlPermissions)>>> = Default::default();
     static ref WAKELOCK_SENDER: Arc::<Mutex<std::sync::mpsc::Sender<(usize, usize)>>> = Arc::new(Mutex::new(start_wakelock_thread()));
     static ref WAKELOCK_KEEP_AWAKE_OPTION: Arc::<Mutex<Option<bool>>> = Default::default();
-}
-
-#[cfg(feature = "flutter")]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-const SWITCH_SIDES_UUID_TTL: Duration = Duration::from_secs(10);
-
-#[cfg(feature = "flutter")]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-lazy_static::lazy_static! {
-    static ref SWITCH_SIDES_UUID: Arc::<Mutex<HashMap<String, (Instant, uuid::Uuid)>>> = Default::default();
-    static ref PENDING_SWITCH_SIDES_UUID: Arc::<Mutex<HashMap<String, (Instant, uuid::Uuid, bool)>>> = Default::default();
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -312,7 +305,6 @@ pub struct Connection {
     session_last_recv_time: Option<Arc<Mutex<Instant>>>,
     #[cfg(windows)]
     portable: PortableState,
-    from_switch: bool,
     options_in_login: Option<OptionMessage>,
     #[cfg(not(any(target_os = "ios")))]
     pressed_modifiers: HashSet<rdev::Key>,
@@ -470,7 +462,6 @@ impl Connection {
             session_last_recv_time: None,
             #[cfg(windows)]
             portable: Default::default(),
-            from_switch: false,
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -685,15 +676,6 @@ impl Connection {
                             if let Err(e) = portable_client::start_portable_service(portable_client::StartPara::Direct) {
                                 log::error!("Failed to start portable service from cm: {:?}", e);
                             }
-                        }
-                        #[cfg(feature = "flutter")]
-                        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                        ipc::Data::SwitchSidesBack => {
-                            let mut misc = Misc::new();
-                            misc.set_switch_back(SwitchBack::default());
-                            let mut msg = Message::new();
-                            msg.set_misc(misc);
-                            conn.send(msg).await;
                         }
                         _ => {}
                     }
@@ -1074,7 +1056,7 @@ impl Connection {
         if self.authorized {
             return true;
         }
-        if self.require_2fa.is_some() && !self.is_recent_session(true) && !self.from_switch {
+        if self.require_2fa.is_some() && !self.is_recent_session(true) {
             self.require_2fa.as_ref().map(|totp| {
                 let bot = crate::auth_2fa::TelegramBot::get();
                 let bot = match bot {
@@ -1103,7 +1085,7 @@ impl Connection {
                 }
             });
             self.awaiting_2fa = true;
-            self.send_login_error(crate::client::REQUIRE_2FA).await;
+            self.send_login_error(REQUIRE_2FA).await;
             // Keep the connection alive so the client can continue with 2FA.
             return true;
         }
@@ -1193,7 +1175,7 @@ impl Connection {
             }
             // Refuse only while nothing can capture a Wayland greeter: the DRM path can.
             if crate::platform::linux::is_login_screen_wayland() && !drm_can_serve_login_screen() {
-                msg = crate::client::LOGIN_SCREEN_WAYLAND.to_owned()
+                msg = LOGIN_SCREEN_WAYLAND.to_owned()
             } else {
                 let dtype = crate::platform::linux::get_display_server();
                 if dtype != crate::platform::linux::DISPLAY_SERVER_WAYLAND
@@ -1408,7 +1390,6 @@ impl Connection {
             restart: self.restart,
             block_input: self.block_input,
             privacy_mode: self.privacy_mode,
-            from_switch: self.from_switch,
         });
     }
 
@@ -1421,7 +1402,7 @@ impl Connection {
         let mut msg_out = Message::new();
         let mut res = LoginResponse::new();
         res.set_error(err.to_string());
-        if err.to_string() == crate::client::REQUIRE_2FA {
+        if err.to_string() == REQUIRE_2FA {
             res.enable_trusted_devices = Self::enable_trusted_devices();
         }
         msg_out.set_login_response(res);
@@ -1849,6 +1830,12 @@ impl Connection {
     }
 
     async fn on_message(&mut self, msg: Message) -> bool {
+        // Legacy wire tags remain decodable, but never grant authorization or reverse roles.
+        if base::session_protocol::is_legacy_role_switch_message(&msg) {
+            self.send_login_error("Runtime role switching is not supported")
+                .await;
+            return false;
+        }
         if let Some(message::Union::Misc(misc)) = &msg.union {
             // Move the CloseReason forward, as this message needs to be received when unauthorized, especially for kcp.
             if let Some(misc::Union::CloseReason(s)) = &misc.union {
@@ -1891,7 +1878,7 @@ impl Connection {
 
             if !crate::common::is_direct_ip_access(&lr.username) && lr.username != Config::get_id()
             {
-                self.send_login_error(crate::client::LOGIN_MSG_OFFLINE)
+                self.send_login_error(LOGIN_MSG_OFFLINE)
                     .await;
                 return false;
             }
@@ -1930,7 +1917,7 @@ impl Connection {
                 if hbb_common::get_version_number(&lr.version)
                     >= hbb_common::get_version_number("1.2.0")
                 {
-                    self.send_login_error(crate::client::LOGIN_MSG_NO_PASSWORD_ACCESS)
+                    self.send_login_error(LOGIN_MSG_NO_PASSWORD_ACCESS)
                         .await;
                 }
                 return true;
@@ -1949,7 +1936,7 @@ impl Connection {
                 if !self.validate_password(allow_logon_screen_password) {
                     self.update_failure(failure, false, 0);
                     self.check_update_temporary_password(false);
-                    self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_WRONG)
+                    self.send_login_error(LOGIN_MSG_PASSWORD_WRONG)
                         .await;
                     self.try_start_cm(lr.my_id, lr.my_name, false);
                 } else {
@@ -1996,7 +1983,7 @@ impl Connection {
                         }
                     } else {
                         self.update_failure(failure, false, 1);
-                        self.send_login_error(crate::client::LOGIN_MSG_2FA_WRONG)
+                        self.send_login_error(LOGIN_MSG_2FA_WRONG)
                             .await;
                     }
                 }
@@ -2015,47 +2002,6 @@ impl Connection {
                         .unwrap()
                         .user_network_delay(self.inner.id(), new_delay);
                     self.network_delay = new_delay;
-                }
-            }
-        } else if let Some(message::Union::SwitchSidesResponse(_s)) = msg.union {
-            #[cfg(feature = "flutter")]
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if let Some(lr) = _s.lr.clone().take() {
-                SWITCH_SIDES_UUID
-                    .lock()
-                    .unwrap()
-                    .retain(|_, v| v.0.elapsed() < SWITCH_SIDES_UUID_TTL);
-                let uuid_old = SWITCH_SIDES_UUID.lock().unwrap().remove(&lr.my_id);
-                if let Ok(uuid) = uuid::Uuid::from_slice(_s.uuid.to_vec().as_ref()) {
-                    if let Some((_instant, uuid_old)) = uuid_old {
-                        if uuid == uuid_old {
-                            if !Self::supports_login_request(&lr) {
-                                log::warn!(
-                                    "Rejected switch sides response for non-remote-desktop session; closing connection"
-                                );
-                                self.send_login_error("Connection not allowed").await;
-                                return false;
-                            }
-                            self.handle_login_request_without_validation(&lr).await;
-                            // Switching sides authorizes without a password, so it must not bypass
-                            // the whitelist, which can be a locked policy pushed by the server.
-                            if !self.check_id_whitelist().await {
-                                return false;
-                            }
-                            self.from_switch = true;
-
-                            if !self.send_logon_response_and_keep_alive().await {
-                                return false;
-                            }
-                            self.try_start_cm(
-                                lr.my_id.clone(),
-                                lr.my_name.clone(),
-                                self.authorized,
-                            );
-                            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                            self.try_start_cm_ipc();
-                        }
-                    }
                 }
             }
         } else if self.authorized {
@@ -2367,26 +2313,6 @@ impl Connection {
                         }
                         _ => {}
                     },
-                    #[cfg(feature = "flutter")]
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    Some(misc::Union::SwitchSidesRequest(s)) => {
-                        if let Ok(uuid) = uuid::Uuid::from_slice(&s.uuid.to_vec()[..]) {
-                            if crate::server::insert_pending_switch_sides_uuid(
-                                self.lr.my_id.clone(),
-                                uuid.clone(),
-                            ) {
-                                crate::run_me(vec![
-                                    "--connect",
-                                    &self.lr.my_id,
-                                    "--switch_uuid",
-                                    uuid.to_string().as_ref(),
-                                ])
-                                .ok();
-                            }
-                            self.on_close("switch sides", false).await;
-                            return false;
-                        }
-                    }
                     #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::ChangeResolution(r)) => {
                         self.change_resolution(None, &r);
@@ -3049,17 +2975,11 @@ impl Connection {
             if q != BoolOption::NotSet {
                 use crate::whiteboard;
                 self.show_my_cursor = q == BoolOption::Yes;
-                #[cfg(target_os = "windows")]
-                let is_lower_win10 = !crate::platform::windows::is_win_10_or_greater();
-                #[cfg(not(target_os = "windows"))]
-                let is_lower_win10 = false;
                 #[cfg(target_os = "linux")]
                 let is_linux_supported = crate::whiteboard::is_supported();
                 #[cfg(not(target_os = "linux"))]
                 let is_linux_supported = false;
-                let not_support_msg = if is_lower_win10 {
-                    "Windows 10 or greater is required."
-                } else if cfg!(target_os = "linux") && !is_linux_supported {
+                let not_support_msg = if cfg!(target_os = "linux") && !is_linux_supported {
                     "This feature is not supported on Wayland."
                 } else {
                     ""
@@ -3523,53 +3443,6 @@ impl Connection {
             _ => false,
         }
     }
-}
-
-#[cfg(feature = "flutter")]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn insert_switch_sides_uuid(id: String, uuid: uuid::Uuid) {
-    SWITCH_SIDES_UUID
-        .lock()
-        .unwrap()
-        .insert(id, (tokio::time::Instant::now(), uuid));
-}
-
-#[cfg(feature = "flutter")]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn insert_pending_switch_sides_uuid(id: String, uuid: uuid::Uuid) -> bool {
-    let mut uuids = PENDING_SWITCH_SIDES_UUID.lock().unwrap();
-    uuids.retain(|_, (instant, _, _)| instant.elapsed() < SWITCH_SIDES_UUID_TTL);
-    if uuids.get(&id).map(|(_, stored_uuid, _)| stored_uuid) == Some(&uuid) {
-        return false;
-    }
-    uuids.insert(id, (tokio::time::Instant::now(), uuid, false));
-    true
-}
-
-#[cfg(feature = "flutter")]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn has_pending_switch_sides_uuid(id: &str, uuid: &uuid::Uuid) -> bool {
-    let mut uuids = PENDING_SWITCH_SIDES_UUID.lock().unwrap();
-    uuids.retain(|_, (instant, _, _)| instant.elapsed() < SWITCH_SIDES_UUID_TTL);
-    uuids
-        .get(id)
-        .map(|(_, stored_uuid, claimed)| stored_uuid == uuid && !*claimed)
-        == Some(true)
-}
-
-#[cfg(feature = "flutter")]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn claim_pending_switch_sides_uuid(id: &str, uuid: &uuid::Uuid) -> bool {
-    let mut uuids = PENDING_SWITCH_SIDES_UUID.lock().unwrap();
-    uuids.retain(|_, (instant, _, _)| instant.elapsed() < SWITCH_SIDES_UUID_TTL);
-    // Keep claimed entries until expiry so replaying a request cannot launch another connection.
-    if let Some((_, stored_uuid, claimed)) = uuids.get_mut(id) {
-        if stored_uuid == uuid && !*claimed {
-            *claimed = true;
-            return true;
-        }
-    }
-    false
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -4254,7 +4127,7 @@ mod test {
             let addr: SocketAddr = format!("192.0.2.{}:1", i + 1).parse().unwrap();
             let server = server.clone();
             handshakes.push(tokio::spawn(async move {
-                crate::server::create_tcp_connection(server, served, addr, true, Default::default())
+                crate::server::create_tcp_connection(server, served, addr, Default::default())
                     .await
             }));
         }
@@ -4273,7 +4146,6 @@ mod test {
             server.clone(),
             served,
             addr,
-            true,
             Default::default(),
         )
         .await;
@@ -4317,7 +4189,7 @@ mod test {
         let (mut controller, (accepted, addr)) = (controller.unwrap(), accepted.unwrap());
         let served = Stream::Tcp(hbb_common::tcp::FramedStream::from(accepted, addr));
         let handshake = tokio::spawn(async move {
-            crate::server::create_tcp_connection(server, served, addr, true, Default::default())
+            crate::server::create_tcp_connection(server, served, addr, Default::default())
                 .await
         });
         let n = MAX_UNAUTHORIZED_MESSAGE + 1;
@@ -4332,26 +4204,6 @@ mod test {
             Err(_) => panic!("the handshake waited for a payload the header should have refused"),
         }
         assert_eq!(unauthorized_count(), 0);
-    }
-
-    #[cfg(feature = "flutter")]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    #[test]
-    fn test_pending_switch_sides_uuid_is_claimed_once() {
-        let id = uuid::Uuid::new_v4().to_string();
-        let uuid = uuid::Uuid::new_v4();
-        let other_uuid = uuid::Uuid::new_v4();
-        assert!(insert_pending_switch_sides_uuid(id.clone(), uuid.clone()));
-
-        assert!(!insert_pending_switch_sides_uuid(id.clone(), uuid.clone()));
-        assert!(has_pending_switch_sides_uuid(&id, &uuid));
-        assert!(!has_pending_switch_sides_uuid(&id, &other_uuid));
-        assert!(!claim_pending_switch_sides_uuid("other-peer", &uuid));
-        assert!(!claim_pending_switch_sides_uuid(&id, &other_uuid));
-        assert!(claim_pending_switch_sides_uuid(&id, &uuid));
-        assert!(!has_pending_switch_sides_uuid(&id, &uuid));
-        assert!(!claim_pending_switch_sides_uuid(&id, &uuid));
-        assert!(!insert_pending_switch_sides_uuid(id, uuid));
     }
 
     #[test]

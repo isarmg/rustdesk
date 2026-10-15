@@ -1,6 +1,7 @@
 LIBRARY "CustomActions"
 
 EXPORTS
+    CheckSupportedWindows
     CustomActionHello
     RemoveRuntimeGeneratedFiles
     TerminateProcesses

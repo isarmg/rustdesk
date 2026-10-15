@@ -1,7 +1,6 @@
 <p align="center">
   <img src="../res/logo-header.svg" alt="RustDesk - Seu desktop remoto"><br>
   <a href="#compilar">Compilar</a> •
-  <a href="#como-compilar-com-o-docker">Docker</a> •
   <a href="#estrutura-de-arquivos">Estrutura</a> •
   <a href="#capturas-de-tela">Capturas de Tela</a><br>
   [<a href="../README.md">Inglês</a>] | [<a href="docs/README-UA.md">Ucraniano</a>] | [<a href="docs/README-CS.md">Tcheco</a>] | [<a href="docs/README-ZH.md">Chinês</a>] | [<a href="docs/README-HU.md">Húngaro</a>] | [<a href="docs/README-ES.md">Espanhol</a>] | [<a href="docs/README-FA.md">Persa</a>] | [<a href="docs/README-FR.md">Francês</a>] | [<a href="docs/README-DE.md">Alemão</a>] | [<a href="docs/README-PL.md">Polonês</a>] | [<a href="docs/README-ID.md">Indonésio</a>] | [<a href="docs/README-FI.md">Finlandês</a>] | [<a href="docs/README-ML.md">Malaiala</a>] | [<a href="docs/README-JP.md">Japonês</a>] | [<a href="docs/README-NL.md">Holandês</a>] | [<a href="docs/README-IT.md">Italiano</a>] | [<a href="docs/README-RU.md">Russo</a>] | [<a href="docs/README-EO.md">Esperanto</a>] | [<a href="docs/README-KR.md">Coreano</a>] | [<a href="docs/README-AR.md">Árabe</a>] | [<a href="docs/README-VN.md">Vietnamita</a>] | [<a href="docs/README-DA.md">Dinamarquês</a>] | [<a href="docs/README-GR.md">Grego</a>] | [<a href="docs/README-TR.md">Turco</a>] | [<a href="docs/README-NO.md">Norueguês</a>] | [<a href="docs/README-RO.md">Romeno</a>]<br>
@@ -123,36 +122,9 @@ mv libsciter-gtk.so target/debug
 VCPKG_ROOT=$HOME/vcpkg cargo run
 ```
 
-## Como compilar com o Docker
+## Native deployment
 
-Comece clonando o repositório e construindo o contêiner Docker:
-
-```sh
-git clone https://github.com/rustdesk/rustdesk
-cd rustdesk
-git submodule update --init --recursive
-docker build -t "rustdesk-builder" .
-```
-
-Depois, cada vez que precisar compilar o aplicativo, execute o seguinte comando:
-
-```sh
-docker run --rm -it -v $PWD:/home/user/rustdesk -v rustdesk-git-cache:/home/user/.cargo/git -v rustdesk-registry-cache:/home/user/.cargo/registry -e PUID="$(id -u)" -e PGID="$(id -g)" rustdesk-builder
-```
-
-Note que a primeira compilação pode demorar mais até que as dependências sejam armazenadas em cache; as compilações subsequentes serão mais rápidas. Além disso, se você precisar especificar argumentos diferentes para o comando de compilação, poderá fazê-lo ao final do comando na posição `<ARGUMENTOS-OPCIONAIS>`. Por exemplo, se você quiser compilar uma versão de lançamento (release) otimizada, executaria o comando acima seguido de `--release`. O executável resultante estará disponível na pasta `target` do seu sistema e pode ser executado com:
-
-```sh
-target/debug/rustdesk
-```
-
-Ou, se estiver executando o executável de lançamento:
-
-```sh
-target/release/rustdesk
-```
-
-Certifique-se de executar esses comandos a partir da raiz do repositório do RustDesk, do contrário o aplicativo pode não encontrar os recursos necessários. Note também que outros subcomandos do cargo, como `install` ou `run`, não são suportados atualmente por este método, pois instalariam ou executariam o programa dentro do contêiner em vez de no sistema hospedeiro.
+For this fork, follow the [native build and deployment instructions](../README.md#编译部署) and [pinned toolchain](BUILD-TOOLCHAIN.md). Applications run natively on physical devices.
 
 ## Estrutura de Arquivos
 

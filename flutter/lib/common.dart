@@ -36,10 +36,8 @@ import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'models/model.dart';
 import 'models/platform_model.dart';
 
-import 'package:flutter_hbb/native/win32.dart'
-    if (dart.library.html) 'package:flutter_hbb/web/win32.dart';
-import 'package:flutter_hbb/native/common.dart'
-    if (dart.library.html) 'package:flutter_hbb/web/common.dart';
+import 'package:flutter_hbb/native/win32.dart';
+import 'package:flutter_hbb/native/common.dart';
 
 final globalKey = GlobalKey<NavigatorState>();
 final navigationBarKey = GlobalKey();
@@ -57,7 +55,6 @@ final isWebOnLinux = isWebOnLinux_;
 final isWebOnMacOs = isWebOnMacOS_;
 var isMobile = isAndroid || isIOS;
 var version = '';
-int androidVersion = 0;
 
 // Only used on Linux.
 // `windowManager.setResizable(false)` will reset the window size to the default size on Linux.
@@ -87,7 +84,6 @@ bool isSingleViewApp() {
 bool isTest = false;
 
 typedef F = String Function(String);
-typedef FMethod = String Function(String, dynamic);
 
 typedef StreamEventHandler = Future<void> Function(Map<String, dynamic>);
 typedef SessionID = UuidValue;
@@ -362,7 +358,8 @@ class MyTheme {
     appBarTheme: AppBarTheme(
       shadowColor: Colors.transparent,
     ),
-    dialogTheme: DialogTheme(
+    dialogTheme: DialogThemeData(
+      backgroundColor: Colors.white,
       elevation: 15,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18.0),
@@ -393,7 +390,7 @@ class MyTheme {
     cardColor: grayBg,
     hintColor: Color(0xFFAAAAAA),
     visualDensity: VisualDensity.adaptivePlatformDensity,
-    tabBarTheme: const TabBarTheme(
+    tabBarTheme: const TabBarThemeData(
       labelColor: Colors.black87,
     ),
     tooltipTheme: tooltipTheme(),
@@ -460,7 +457,8 @@ class MyTheme {
     appBarTheme: AppBarTheme(
       shadowColor: Colors.transparent,
     ),
-    dialogTheme: DialogTheme(
+    dialogTheme: DialogThemeData(
+      backgroundColor: Color(0xFF18191E),
       elevation: 15,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18.0),
@@ -494,7 +492,7 @@ class MyTheme {
     ),
     cardColor: Color(0xFF24252B),
     visualDensity: VisualDensity.adaptivePlatformDensity,
-    tabBarTheme: const TabBarTheme(
+    tabBarTheme: const TabBarThemeData(
       labelColor: Colors.white70,
     ),
     tooltipTheme: tooltipTheme(),
@@ -1159,7 +1157,7 @@ void msgBox(SessionID sessionId, String type, String title, String text,
       await bind.sessionSetCommon(
         sessionId: sessionId,
         key: 'continue-insecure-connection',
-        value: 'N',
+        value: title == 'Trust this device?' ? 'N:$link' : 'N',
       );
       dialogManager.dismissAll();
       closeConnection();
@@ -1170,7 +1168,7 @@ void msgBox(SessionID sessionId, String type, String title, String text,
         bind.sessionSetCommon(
           sessionId: sessionId,
           key: 'continue-insecure-connection',
-          value: 'Y',
+          value: title == 'Trust this device?' ? 'Y:$link' : 'Y',
         ),
       );
       dialogManager.dismissAll();
@@ -1182,11 +1180,12 @@ void msgBox(SessionID sessionId, String type, String title, String text,
         content: SelectionArea(child: msgboxContent(type, title, text)),
         actions: [
           dialogButton(
-            'Continue',
+            title == 'Trust this device?' ? 'Trust and connect' : 'Continue',
             onPressed: continueSession,
             isOutline: true,
           ),
-          dialogButton('Disconnect', onPressed: closeSession),
+          dialogButton(title == 'Trust this device?' ? 'Cancel' : 'Disconnect',
+              onPressed: closeSession),
         ],
         onSubmit: closeSession,
         onCancel: closeSession,
@@ -1261,7 +1260,7 @@ void msgBox(SessionID sessionId, String type, String title, String text,
               ? () {
                   // Disable the button
                   enabled.value = false;
-                  reconnect(dialogManager, sessionId, false);
+                  reconnect(dialogManager, sessionId);
                 }
               : null,
         ));
@@ -1485,62 +1484,6 @@ class AccessibilityListener extends StatelessWidget {
   }
 }
 
-class AndroidPermissionManager {
-  static Completer<bool>? _completer;
-  static Timer? _timer;
-  static var _current = "";
-
-  static Future<bool> check(String type) {
-    if (isDesktop || isWeb) {
-      return Future.value(true);
-    }
-    return gFFI.invokeMethod("check_permission", type);
-  }
-
-  // startActivity goto Android Setting's page to request permission manually by user
-  static void startAction(String action) {
-    gFFI.invokeMethod(AndroidChannel.kStartAction, action);
-  }
-
-  /// We use XXPermissions to request permissions,
-  /// for supported types, see https://github.com/getActivity/XXPermissions/blob/e46caea32a64ad7819df62d448fb1c825481cd28/library/src/main/java/com/hjq/permissions/Permission.java
-  static Future<bool> request(String type) {
-    if (isDesktop || isWeb) {
-      return Future.value(true);
-    }
-
-    gFFI.invokeMethod("request_permission", type);
-
-    // clear last task
-    if (_completer?.isCompleted == false) {
-      _completer?.complete(false);
-    }
-    _timer?.cancel();
-
-    _current = type;
-    _completer = Completer<bool>();
-
-    _timer = Timer(Duration(seconds: 120), () {
-      if (_completer == null) return;
-      if (!_completer!.isCompleted) {
-        _completer!.complete(false);
-      }
-      _completer = null;
-      _current = "";
-    });
-    return _completer!.future;
-  }
-
-  static complete(String type, bool res) {
-    if (type != _current) {
-      res = false;
-    }
-    _timer?.cancel();
-    _completer?.complete(res);
-    _current = "";
-  }
-}
-
 RadioListTile<T> getRadio<T>(
     Widget title, T toValue, T curValue, ValueChanged<T?>? onChange,
     {bool? dense}) {
@@ -1589,9 +1532,7 @@ bool option2bool(String option, String value) {
   if (option.startsWith("enable-")) {
     res = value != "N";
   } else if (option.startsWith("allow-") ||
-      option == kOptionStopService ||
-      option == kOptionDirectServer ||
-      option == kOptionForceAlwaysRelay) {
+      option == kOptionStopService) {
     res = value == "Y";
   } else {
     // "" is true
@@ -1602,15 +1543,10 @@ bool option2bool(String option, String value) {
 
 String bool2option(String option, bool b) {
   String res;
-  if (option.startsWith('enable-') &&
-      option != kOptionEnableUdpPunch &&
-      option != kOptionEnableIpv6Punch &&
-      option != kOptionEnableWebrtc) {
+  if (option.startsWith('enable-')) {
     res = b ? defaultOptionYes : 'N';
   } else if (option.startsWith('allow-') ||
-      option == kOptionStopService ||
-      option == kOptionDirectServer ||
-      option == kOptionForceAlwaysRelay) {
+      option == kOptionStopService) {
     res = b ? 'Y' : defaultOptionNo;
   } else {
     res = b ? 'Y' : 'N';
@@ -2148,8 +2084,6 @@ Future<bool> restoreWindowPosition(WindowType type,
   return false;
 }
 
-var webInitialLink = "";
-
 /// Initialize uni links for macos/windows
 ///
 /// [Availability]
@@ -2166,12 +2100,7 @@ Future<bool> initUniLinks() async {
     if (initialLink == null || initialLink.isEmpty) {
       return false;
     }
-    if (isWeb) {
-      webInitialLink = initialLink;
-      return false;
-    } else {
-      return handleUriLink(uriString: initialLink);
-    }
+    return handleUriLink(uriString: initialLink);
   } catch (err) {
     debugPrintStack(label: "$err");
     return false;
@@ -2241,8 +2170,6 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
   UriLinkType? type;
   String? id;
   String? password;
-  String? switchUuid;
-  bool? forceRelay;
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--connect':
@@ -2256,13 +2183,6 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
         password = args[i + 1];
         i++;
         break;
-      case '--switch_uuid':
-        switchUuid = args[i + 1];
-        i++;
-        break;
-      case '--relay':
-        forceRelay = true;
-        break;
       default:
         break;
     }
@@ -2272,9 +2192,7 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
       case UriLinkType.remoteDesktop:
         Future.delayed(Duration.zero, () {
           rustDeskWinManager.newRemoteDesktop(id!,
-              password: password,
-              switchUuid: switchUuid,
-              forceRelay: forceRelay);
+              password: password);
         });
         break;
 
@@ -2301,26 +2219,6 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     command = '--connect';
     id = uri.path.substring("/new/".length);
   } else if (uri.authority == "config") {
-    if (isAndroid || isIOS) {
-      final allowDeepLinkServerSettings =
-          bind.mainGetBuildinOption(key: kOptionAllowDeepLinkServerSettings) ==
-              'Y';
-      if (!allowDeepLinkServerSettings) {
-        debugPrint(
-            "Ignore rustdesk://config because $kOptionAllowDeepLinkServerSettings is not enabled.");
-        // Keep the user-facing error generic; detailed rejection reason is in debug logs.
-        // Delay toast to avoid missing overlay during cold-start deeplink handling.
-        Timer(Duration(seconds: 1), () {
-          showToast(translate('Failed'));
-        });
-        return null;
-      }
-      final config = uri.path.substring("/".length);
-      // add a timer to make showToast work
-      Timer(Duration(seconds: 1), () {
-        importConfig(null, null, config);
-      });
-    }
     return null;
   } else if (uri.authority == "password") {
     if (isAndroid || isIOS) {
@@ -2350,34 +2248,18 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     if (uri.path.length > 1) {
       id = uri.path.substring(1);
     }
-  } else if (uri.authority.length > 2 &&
-      (uri.path.length <= 1 ||
-          (uri.path == '/r' || uri.path.startsWith('/r@')))) {
-    // rustdesk://<connect-id>
-    // rustdesk://<connect-id>/r
-    // rustdesk://<connect-id>/r@<server>
+  } else if (uri.authority.length > 2 && uri.path.length <= 1) {
     command = '--connect';
     id = uri.authority;
-    if (uri.path.length > 1) {
-      id = id + uri.path;
-    }
   }
 
   var queryParameters =
       uri.queryParameters.map((k, v) => MapEntry(k.toLowerCase(), v));
 
-  var key = queryParameters["key"];
-  if (id != null) {
-    if (key != null) {
-      id = "$id?key=$key";
-    }
-  }
-
   if (isMobile && id != null) {
-    final forceRelay = queryParameters["relay"] != null;
     final password = queryParameters["password"];
 
-    connect(Get.context!, id, forceRelay: forceRelay, password: password);
+    connect(Get.context!, id, password: password);
     return null;
   }
 
@@ -2388,9 +2270,6 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     var param = queryParameters;
     String? password = param["password"];
     if (password != null) args.addAll(['--password', password]);
-    String? switch_uuid = param["switch_uuid"];
-    if (switch_uuid != null) args.addAll(['--switch_uuid', switch_uuid]);
-    if (param["relay"] != null) args.add("--relay");
     return args;
   }
 
@@ -2398,20 +2277,17 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
 }
 
 connectMainDesktop(String id,
-    {bool? forceRelay,
-    String? password,
+    {String? password,
     String? connToken,
     bool? isSharedPassword}) async {
   await rustDeskWinManager.newRemoteDesktop(id,
       password: password,
-      isSharedPassword: isSharedPassword,
-      forceRelay: forceRelay);
+      isSharedPassword: isSharedPassword);
 }
 
 /// Connect to a peer with [id].
 connect(BuildContext context, String id,
-    {bool forceRelay = false,
-    String? password,
+    {String? password,
     String? connToken,
     bool? isSharedPassword}) async {
   if (id == '') return;
@@ -2427,10 +2303,7 @@ connect(BuildContext context, String id,
       }
     } catch (_) {}
   }
-  id = id.replaceAll(' ', '');
-  final oldId = id;
-  id = await bind.mainHandleRelayId(id: id);
-  forceRelay = id != oldId || forceRelay;
+  id = id.trim();
 
   if (isDesktop) {
     if (desktopType == DesktopType.main) {
@@ -2438,14 +2311,12 @@ connect(BuildContext context, String id,
         id,
         password: password,
         isSharedPassword: isSharedPassword,
-        forceRelay: forceRelay,
       );
     } else {
       await rustDeskWinManager.call(WindowType.Main, kWindowConnect, {
         'id': id,
         'password': password,
         'isSharedPassword': isSharedPassword,
-        'forceRelay': forceRelay,
         'connToken': connToken,
       });
     }
@@ -2470,8 +2341,7 @@ connect(BuildContext context, String id,
             builder: (BuildContext context) => RemotePage(
                 id: id,
                 password: password,
-                isSharedPassword: isSharedPassword,
-                forceRelay: forceRelay),
+                isSharedPassword: isSharedPassword),
           ),
         );
       }
@@ -2671,61 +2541,6 @@ bool get kUseCompatibleUiMode =>
     const [WindowsTarget.w7].contains(windowsBuildNumber.windowsVersion);
 
 bool get isWin10 => windowsBuildNumber.windowsVersion == WindowsTarget.w10;
-
-class ServerConfig {
-  late String idServer;
-  late String relayServer;
-  late String apiServer;
-  late String key;
-
-  ServerConfig(
-      {String? idServer, String? relayServer, String? apiServer, String? key}) {
-    this.idServer = idServer?.trim() ?? '';
-    this.relayServer = relayServer?.trim() ?? '';
-    this.apiServer = apiServer?.trim() ?? '';
-    this.key = key?.trim() ?? '';
-  }
-
-  /// decode from shared string (from user shared or rustdesk-server generated)
-  /// also see [encode]
-  /// throw when decoding failure
-  ServerConfig.decode(String msg) {
-    var json = {};
-    try {
-      // back compatible
-      json = jsonDecode(msg);
-    } catch (err) {
-      final input = msg.split('').reversed.join('');
-      final bytes = base64Decode(base64.normalize(input));
-      json = jsonDecode(utf8.decode(bytes, allowMalformed: true));
-    }
-    idServer = json['host'] ?? '';
-    relayServer = json['relay'] ?? '';
-    apiServer = json['api'] ?? '';
-    key = json['key'] ?? '';
-  }
-
-  /// encode to shared string
-  /// also see [ServerConfig.decode]
-  String encode() {
-    Map<String, String> config = {};
-    config['host'] = idServer.trim();
-    config['relay'] = relayServer.trim();
-    config['api'] = apiServer.trim();
-    config['key'] = key.trim();
-    return base64UrlEncode(Uint8List.fromList(jsonEncode(config).codeUnits))
-        .split('')
-        .reversed
-        .join();
-  }
-
-  /// from local options
-  ServerConfig.fromOptions(Map<String, dynamic> options)
-      : idServer = options['custom-rendezvous-server'] ?? "",
-        relayServer = options['relay-server'] ?? "",
-        apiServer = options['api-server'] ?? "",
-        key = options['key'] ?? "";
-}
 
 Widget dialogButton(String text,
     {required VoidCallback? onPressed,
@@ -3297,93 +3112,6 @@ class _CountDownButtonState extends State<_CountDownButton> {
   }
 }
 
-importConfig(List<TextEditingController>? controllers, List<RxString>? errMsgs,
-    String? text) {
-  text = text?.trim();
-  if (text != null && text.isNotEmpty) {
-    try {
-      final sc = ServerConfig.decode(text);
-      if (isWeb || isIOS) {
-        sc.relayServer = '';
-      }
-      if (sc.idServer.isNotEmpty) {
-        Future<bool> success = setServerConfig(controllers, errMsgs, sc);
-        success.then((value) {
-          if (value) {
-            showToast(translate('Import server configuration successfully'));
-          } else {
-            showToast(translate('Invalid server configuration'));
-          }
-        });
-      } else {
-        showToast(translate('Invalid server configuration'));
-      }
-      return sc;
-    } catch (e) {
-      showToast(translate('Invalid server configuration'));
-    }
-  } else {
-    showToast(translate('Clipboard is empty'));
-  }
-}
-
-Future<bool> setServerConfig(
-  List<TextEditingController>? controllers,
-  List<RxString>? errMsgs,
-  ServerConfig config,
-) async {
-  String removeEndSlash(String input) {
-    if (input.endsWith('/')) {
-      return input.substring(0, input.length - 1);
-    }
-    return input;
-  }
-
-  config.idServer = removeEndSlash(config.idServer.trim());
-  config.relayServer = removeEndSlash(config.relayServer.trim());
-  config.apiServer = removeEndSlash(config.apiServer.trim());
-  config.key = config.key.trim();
-  if (controllers != null) {
-    controllers[0].text = config.idServer;
-    controllers[1].text = config.relayServer;
-    controllers[2].text = config.apiServer;
-    controllers[3].text = config.key;
-  }
-  // id
-  if (config.idServer.isNotEmpty && errMsgs != null) {
-    errMsgs[0].value = translate(await bind.mainTestIfValidServer(
-        server: config.idServer, testWithProxy: true));
-    if (errMsgs[0].isNotEmpty) {
-      return false;
-    }
-  }
-  // relay
-  if (config.relayServer.isNotEmpty && errMsgs != null) {
-    errMsgs[1].value = translate(await bind.mainTestIfValidServer(
-        server: config.relayServer, testWithProxy: true));
-    if (errMsgs[1].isNotEmpty) {
-      return false;
-    }
-  }
-  // api
-  if (config.apiServer.isNotEmpty && errMsgs != null) {
-    if (!config.apiServer.startsWith('http://') &&
-        !config.apiServer.startsWith('https://')) {
-      errMsgs[2].value =
-          '${translate("API Server")}: ${translate("invalid_http")}';
-      return false;
-    }
-  }
-
-  // should set one by one
-  await bind.mainSetOption(
-      key: 'custom-rendezvous-server', value: config.idServer);
-  await bind.mainSetOption(key: 'relay-server', value: config.relayServer);
-  await bind.mainSetOption(key: 'api-server', value: config.apiServer);
-  await bind.mainSetOption(key: 'key', value: config.key);
-  return true;
-}
-
 ColorFilter? svgColor(Color? color) {
   if (color == null) {
     return null;
@@ -3714,9 +3442,6 @@ bool isChangePermanentPasswordDisabled() =>
     bind.mainGetBuildinOption(key: kOptionDisableChangePermanentPassword) ==
     'Y';
 
-bool isChangeIdDisabled() =>
-    bind.mainGetBuildinOption(key: kOptionDisableChangeId) == 'Y';
-
 bool isUnlockPinDisabled() =>
     bind.mainGetBuildinOption(key: kOptionDisableUnlockPin) == 'Y';
 
@@ -3899,19 +3624,9 @@ String get appName {
 }
 
 String getConnectionText(bool secure, bool direct, String streamType) {
-  String connectionText;
-  if (secure && direct) {
-    connectionText = translate("Direct and encrypted connection");
-  } else if (secure && !direct) {
-    connectionText = translate("Relayed and encrypted connection");
-  } else if (!secure && direct) {
-    connectionText = translate("Direct and unencrypted connection");
-  } else {
-    connectionText = translate("Relayed and unencrypted connection");
-  }
-  if (streamType == 'Relay') {
-    streamType = 'TCP';
-  }
+  final connectionText = translate(secure
+      ? "Direct and encrypted connection"
+      : "Direct and unencrypted connection");
   if (streamType.isEmpty) {
     return connectionText;
   } else {

@@ -83,9 +83,7 @@ const Map<int, String> _kUsbHidKeyNames = {
 /// Bindings name physical key positions (US layout names), whatever the
 /// active keyboard layout: the native matcher sees the key through its USB
 /// HID usage (`rdev::usb_hid_key_from_code` -> `event_to_key_name` in
-/// `src/keyboard/shortcuts.rs`) and the Web matcher through
-/// `KeyboardEvent.code` (`flutter/web/js/src/shortcut_matcher.ts`). Parity
-/// is enforced against `flutter/test/fixtures/shortcut_key_usb_hid.json` by
+/// `src/keyboard/shortcuts.rs`). Parity is enforced against `flutter/test/fixtures/shortcut_key_usb_hid.json` by
 /// a Dart test and the Rust `usb_hid_keys_match_fixture` test.
 String? physicalKeyName(PhysicalKeyboardKey k) {
   final usage = k.usbHidUsage;
@@ -114,7 +112,6 @@ class ShortcutPlatformCapabilities {
   final bool includeTabShortcuts;
   final bool includeToolbarShortcut;
   final bool includeCloseTabShortcut;
-  final bool includeSwitchSidesShortcut;
   final bool includeResetCanvasShortcut;
   final bool includePinToolbarShortcut;
   final bool includeViewModeShortcut;
@@ -127,7 +124,6 @@ class ShortcutPlatformCapabilities {
     required this.includeTabShortcuts,
     required this.includeToolbarShortcut,
     required this.includeCloseTabShortcut,
-    required this.includeSwitchSidesShortcut,
     required this.includeResetCanvasShortcut,
     required this.includePinToolbarShortcut,
     required this.includeViewModeShortcut,
@@ -171,10 +167,6 @@ List<Map<String, dynamic>> filterDefaultBindingsForPlatform(
       continue;
     }
     if (!cap.includeCloseTabShortcut && action == kShortcutActionCloseTab) {
-      continue;
-    }
-    if (!cap.includeSwitchSidesShortcut &&
-        action == kShortcutActionSwitchSides) {
       continue;
     }
     if (!cap.includeResetCanvasShortcut &&

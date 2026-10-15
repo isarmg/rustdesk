@@ -1,6 +1,6 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ipc::Connection;
-#[cfg(not(any(target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::ipc::{self, Data};
 #[cfg(target_os = "windows")]
 use crate::ipc::ClipboardNonFile;
@@ -40,9 +40,8 @@ pub struct Client {
     pub restart: bool,
     pub block_input: bool,
     pub privacy_mode: bool,
-    pub from_switch: bool,
     #[serde(skip)]
-    #[cfg(not(any(target_os = "ios")))]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     tx: UnboundedSender<Data>,
 }
 
@@ -112,8 +111,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
         restart: bool,
         block_input: bool,
         privacy_mode: bool,
-        from_switch: bool,
-        #[cfg(not(any(target_os = "ios")))] tx: mpsc::UnboundedSender<Data>,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))] tx: mpsc::UnboundedSender<Data>,
     ) {
         let client = Client {
             id,
@@ -128,8 +126,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
             restart,
             block_input,
             privacy_mode,
-            from_switch,
-            #[cfg(not(any(target_os = "ios")))]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             tx,
         };
         CLIENTS
@@ -151,21 +148,6 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
                 .map(|c| c.disconnected = true);
         }
 
-        #[cfg(any(target_os = "android"))]
-        if CLIENTS
-            .read()
-            .unwrap()
-            .iter()
-            .next()
-            .is_none()
-        {
-            if let Err(e) =
-                scrap::android::call_main_service_set_by_name("stop_capture", None, None)
-            {
-                log::debug!("stop_capture err:{}", e);
-            }
-        }
-
         self.ui_handler.remove_connection(id, close);
     }
 
@@ -177,7 +159,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
 }
 
 #[inline]
-#[cfg(not(any(target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn check_click_time(id: i32) {
     if let Some(client) = CLIENTS.read().unwrap().get(&id) {
         allow_err!(client.tx.send(Data::ClickTime(0)));
@@ -190,7 +172,7 @@ pub fn get_click_time() -> i64 {
 }
 
 #[inline]
-#[cfg(not(any(target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn authorize(id: i32) {
     if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
         client.authorized = true;
@@ -199,7 +181,7 @@ pub fn authorize(id: i32) {
 }
 
 #[inline]
-#[cfg(not(any(target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn close(id: i32) {
     if let Some(client) = CLIENTS.read().unwrap().get(&id) {
         allow_err!(client.tx.send(Data::Close));
@@ -221,7 +203,7 @@ pub fn remove(id: i32) {
 }
 
 #[inline]
-#[cfg(not(any(target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn switch_permission(id: i32, name: String, enabled: bool) {
     #[cfg(target_os = "android")]
     let is_keyboard_permission = name == "keyboard";
@@ -245,30 +227,6 @@ pub fn switch_permission(id: i32, name: String, enabled: bool) {
     };
 }
 
-#[inline]
-#[cfg(target_os = "android")]
-pub fn switch_permission_all(name: String, enabled: bool) {
-    if name != "keyboard"
-        && !option2bool(
-            OPTION_ENABLE_PERM_CHANGE_IN_ACCEPT_WINDOW,
-            &crate::get_builtin_option(OPTION_ENABLE_PERM_CHANGE_IN_ACCEPT_WINDOW),
-        )
-    {
-        log::info!(
-            "blocked cm switch_permission_all by policy, permission={}, enabled={}",
-            name,
-            enabled
-        );
-        return;
-    }
-    for (_, client) in CLIENTS.read().unwrap().iter() {
-        allow_err!(client.tx.send(Data::SwitchPermission {
-            name: name.clone(),
-            enabled
-        }));
-    }
-}
-
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
 #[inline]
 pub fn get_clients_state() -> String {
@@ -281,22 +239,6 @@ pub fn get_clients_state() -> String {
 pub fn get_clients_length() -> usize {
     let clients = CLIENTS.read().unwrap();
     clients.len()
-}
-
-#[inline]
-#[cfg(target_os = "android")]
-pub fn has_active_clients() -> bool {
-    let clients = CLIENTS.read().unwrap();
-    clients.values().any(|c| !c.disconnected)
-}
-
-#[inline]
-#[cfg(feature = "flutter")]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn switch_back(id: i32) {
-    if let Some(client) = CLIENTS.read().unwrap().get(&id) {
-        allow_err!(client.tx.send(Data::SwitchSidesBack));
-    };
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -314,9 +256,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                         }
                         Ok(Some(data)) => {
                             match data {
-                                Data::Login{id, peer_id, name, avatar, authorized, keyboard, clipboard, audio, restart, block_input, privacy_mode, from_switch} => {
+                                Data::Login{id, peer_id, name, avatar, authorized, keyboard, clipboard, audio, restart, block_input, privacy_mode} => {
                                     log::debug!("conn_id: {}", id);
-                                    self.cm.add_connection(id, peer_id, name, avatar, authorized, keyboard, clipboard, audio, restart, block_input, privacy_mode, from_switch, self.tx.clone());
+                                    self.cm.add_connection(id, peer_id, name, avatar, authorized, keyboard, clipboard, audio, restart, block_input, privacy_mode, self.tx.clone());
                                     self.conn_id = id;
                                     self.running = true;
                                     break;
@@ -486,62 +428,6 @@ pub async fn start_ipc<T: InvokeUiCM>(cm: ConnectionManager<T>) {
         }
     }
     quit_cm();
-}
-
-#[cfg(target_os = "android")]
-#[tokio::main(flavor = "current_thread")]
-pub async fn start_listen<T: InvokeUiCM>(
-    cm: ConnectionManager<T>,
-    mut rx: mpsc::UnboundedReceiver<Data>,
-    tx: mpsc::UnboundedSender<Data>,
-) {
-    let mut current_id = 0;
-    loop {
-        match rx.recv().await {
-            Some(Data::Login {
-                id,
-                peer_id,
-                name,
-                avatar,
-                authorized,
-                keyboard,
-                clipboard,
-                audio,
-                restart,
-                block_input,
-                privacy_mode,
-                from_switch,
-                ..
-            }) => {
-                current_id = id;
-                cm.add_connection(
-                    id,
-                    peer_id,
-                    name,
-                    avatar,
-                    authorized,
-                    keyboard,
-                    clipboard,
-                    audio,
-                    restart,
-                    block_input,
-                    privacy_mode,
-                    from_switch,
-                    tx.clone(),
-                );
-            }
-
-            Some(Data::Close) => {
-                break;
-            }
-
-            None => {
-                break;
-            }
-            _ => {}
-        }
-    }
-    cm.remove_connection(current_id, true);
 }
 
 #[cfg(windows)]

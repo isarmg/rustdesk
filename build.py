@@ -15,9 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
-# Captured at import, while cwd is still the repo root: before Python 3.9 the main script's __file__
-# stays relative (bpo-20443), so abspath() re-resolves it against the cwd -- and the ubuntu18.04
-# packaging container runs 3.6 and chdir's into flutter/ before it reaches the libdrmtap code.
+# Capture the repository root before packaging changes the working directory to flutter/.
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 windows = platform.platform().startswith('Windows')
@@ -26,8 +24,7 @@ osx = platform.platform().startswith(
 hbb_name = 'rustdesk' + ('.exe' if windows else '')
 exe_path = 'target/release/' + hbb_name
 if windows:
-    win_arch = 'arm64' if platform.machine().lower() in ('arm64', 'aarch64') else 'x64'
-    flutter_build_dir = f'build/windows/{win_arch}/runner/Release/'
+    flutter_build_dir = 'build/windows/x64/runner/Release/'
 elif osx:
     flutter_build_dir = 'build/macos/Build/Products/Release/'
 else:
@@ -38,14 +35,11 @@ skip_cargo = False
 
 def get_deb_arch() -> str:
     custom_arch = os.environ.get("DEB_ARCH")
-    if custom_arch is None:
-        return "amd64"
-    return custom_arch
+    if custom_arch not in (None, 'amd64'):
+        raise ValueError('Linux packages support only x86_64 (DEB_ARCH=amd64)')
+    return 'amd64'
 
 def get_deb_extra_depends() -> str:
-    custom_arch = os.environ.get("DEB_ARCH")
-    if custom_arch == "armhf":
-        return ", libatomic1"
     return ""
 
 def system2(cmd):
@@ -169,42 +163,6 @@ def make_parser():
             help='Enable feature screencapturekit'
         )
     return parser
-
-
-# Generate build script for docker
-#
-# it assumes all build dependencies are installed in environments
-# Note: do not use it in bare metal, or may break build environments
-def generate_build_script_for_docker():
-    with open("/tmp/build.sh", "w") as f:
-        f.write('''
-            #!/bin/bash
-            # environment
-            export CPATH="$(clang -v 2>&1 | grep "Selected GCC installation: " | cut -d' ' -f4-)/include"
-            # flutter
-            pushd /opt
-            wget https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.0.5-stable.tar.xz
-            tar -xvf flutter_linux_3.0.5-stable.tar.xz
-            export PATH=`pwd`/flutter/bin:$PATH
-            popd
-            # flutter_rust_bridge
-            dart pub global activate ffigen --version 5.0.1
-            pushd /tmp && git clone https://github.com/SoLongAndThanksForAllThePizza/flutter_rust_bridge --depth=1 && popd
-            pushd /tmp/flutter_rust_bridge/frb_codegen && cargo install --path . --locked && popd
-            pushd flutter && flutter pub get && popd
-            ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart
-            # install vcpkg
-            pushd /opt
-            export VCPKG_ROOT=`pwd`/vcpkg
-            git clone https://github.com/microsoft/vcpkg
-            vcpkg/bootstrap-vcpkg.sh
-            popd
-            $VCPKG_ROOT/vcpkg install --x-install-root="$VCPKG_ROOT/installed"
-            # build rustdesk
-            ./build.py --flutter --hwcodec
-        ''')
-    system2("chmod +x /tmp/build.sh")
-    system2("bash /tmp/build.sh")
 
 
 # Downloading third party resources is deprecated.
@@ -349,6 +307,8 @@ def generate_control_file(version):
     control_file_path = "../res/DEBIAN/control"
     system2('/bin/rm -rf %s' % control_file_path)
 
+    floor = measured_glibc_floor()
+    print(f'[package] libc6 floor measured at {floor}')
     content = """Package: rustdesk
 Section: net
 Priority: optional
@@ -356,11 +316,11 @@ Version: %s
 Architecture: %s
 Maintainer: rustdesk <info@rustdesk.com>
 Homepage: https://rustdesk.com
-Depends: libgtk-3-0t64 | libgtk-3-0, libasound2t64 | libasound2, libsystemd0, curl, libva2, libva-drm2, libva-x11-2, libgstreamer-plugins-base1.0-0, gstreamer1.0-pipewire%s
+Depends: libgtk-3-0t64 | libgtk-3-0, libasound2t64 | libasound2, libsystemd0, curl, libva2, libva-drm2, libva-x11-2, libgstreamer-plugins-base1.0-0, gstreamer1.0-pipewire%s, libc6 (>= %s)
 Recommends: libayatana-appindicator3-1
 Description: A remote control software.
 
-""" % (version, get_deb_arch(), get_deb_extra_depends())
+""" % (version, get_deb_arch(), get_deb_extra_depends(), floor)
     file = open(control_file_path, "w")
     file.write(content)
     file.close()
@@ -665,45 +625,37 @@ def stage_libdrmtap_into_deb(so_path):
 
 
 def _max_glibc_minor(path):
-    # Read from .dynstr rather than via objdump so packaging needs no binutils; chunked because
-    # librustdesk.so is ~45 MB.
-    best = 0
-    with open(path, 'rb') as f:
-        tail = b''
-        while True:
-            chunk = f.read(1 << 20)
-            if not chunk:
-                return best
-            for m in re.finditer(rb'GLIBC_2\.(\d+)', tail + chunk):
-                best = max(best, int(m.group(1)))
-            tail = chunk[-16:]
+    # Inspect required symbol versions, not arbitrary strings or exported libc versions.
+    result = subprocess.run(
+        ['readelf', '--version-info', str(path)], check=True, capture_output=True,
+        text=True, env={**os.environ, 'LC_ALL': 'C'})
+    needs = result.stdout.partition('Version needs section')[2]
+    return max((int(m) for m in re.findall(r'Name: GLIBC_2\.(\d+)', needs)), default=0)
 
 
-def measured_glibc_floor():
-    # libdrmtap is built on a newer base than the rest of the deb, so the floor is whichever staged
-    # object is higher -- and it moves whenever either base does.
-    paths = [p for p in glob.glob('tmpdeb/usr/lib/rustdesk/libdrmtap.so.0.*')
-             + glob.glob('tmpdeb/usr/share/rustdesk/lib/librustdesk.so')
-             + glob.glob('tmpdeb/usr/share/rustdesk/rustdesk')
-             if os.path.isfile(p) and not os.path.islink(p)]
+def measured_glibc_floor(staging="tmpdeb/usr"):
+    # Include the Flutter engine and plugins as well as the executable and optional libdrmtap.
+    paths = []
+    for path in pathlib.Path(staging).rglob('*'):
+        if path.is_file() and not path.is_symlink():
+            with path.open('rb') as f:
+                if f.read(4) == b'\x7fELF':
+                    paths.append(str(path))
     minor = max((_max_glibc_minor(p) for p in paths), default=0)
     if not minor:
         raise Exception(
             f'could not measure a GLIBC_2.x floor from any staged object ({paths or "none found"}); '
-            'refusing to ship the unattended-wayland variant with an undeclared libc6 floor, which '
-            'is what lets it install on a host where libdrmtap can never load')
+            'refusing to ship a package with an undeclared libc6 floor')
     return f'2.{minor}'
 
 
 def retarget_control_to_drm_variant():
     # Rewrite the control file that generate_control_file just produced, instead of parameterizing that
-    # function: the stock packaging path stays exactly as upstream wrote it, and everything specific to
-    # this variant lives here. The variant installs the same files as the stock package, so it must
+    # function: variant-specific metadata lives here. The variant installs the same files
+    # as the stock package, so it must
     # conflict with and replace it: you install one or the other, never both. It also needs libdrmtap's
     # own runtime deps, which the stock package has no reason to carry.
     path = '../res/DEBIAN/control'
-    floor = measured_glibc_floor()
-    print(f'[drm] {DRM_PACKAGE_NAME} libc6 floor measured at {floor}')
     with open(path) as f:
         lines = f.readlines()
     out = []
@@ -713,8 +665,7 @@ def retarget_control_to_drm_variant():
             out.append('Conflicts: rustdesk\nReplaces: rustdesk\nProvides: rustdesk\n')
         elif line.startswith('Depends:'):
             # 2.4.101 is where drmModeGetFB2 landed; below it libdrmtap loads and can never capture.
-            out.append(line.rstrip('\n') + ', libdrm2 (>= 2.4.101), libegl1, libgles2, '
-                       f'libc6 (>= {floor})\n')
+            out.append(line.rstrip('\n') + ', libdrm2 (>= 2.4.101), libegl1, libgles2\n')
         else:
             out.append(line)
     body = ''.join(out)
@@ -925,9 +876,9 @@ def build_deb_from_folder(version, binary_folder, want_drm=False):
 
 def build_flutter_dmg(version, features):
     if not skip_cargo:
-        # set minimum osx build target, now is 10.14, which is the same as the flutter xcode project
+        # Keep the Rust library aligned with the macOS 26 application minimum.
         system2(
-            f'MACOSX_DEPLOYMENT_TARGET=10.14 cargo build --locked --features {features} --release')
+            f'MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --locked --features {features} --release')
     # copy dylib
     system2(
         "cp target/release/liblibrustdesk.dylib target/release/librustdesk.dylib")
@@ -935,9 +886,8 @@ def build_flutter_dmg(version, features):
     # cargo builds a single-arch dylib for the host; restrict Xcode to the same arch
     # so the universal-by-default ARCHS_STANDARD doesn't try to link a missing slice.
     # FLUTTER_XCODE_* env vars are forwarded to xcodebuild as build settings.
-    mac_arch = 'arm64' if platform.machine().lower() in ('arm64', 'aarch64') else 'x86_64'
     system2(
-        f'FLUTTER_XCODE_ARCHS={mac_arch} FLUTTER_XCODE_ONLY_ACTIVE_ARCH=YES flutter build macos --release')
+        'MACOSX_DEPLOYMENT_TARGET=26.0 FLUTTER_XCODE_ARCHS=arm64 FLUTTER_XCODE_ONLY_ACTIVE_ARCH=YES flutter build macos --release')
     system2('cp -rf ../target/release/service ./build/macos/Build/Products/Release/RustDesk.app/Contents/MacOS/')
     '''
     system2(
@@ -990,6 +940,10 @@ def build_flutter_windows(version, features, skip_portable_pack):
 
 
 def main():
+    host_arch = platform.machine().lower()
+    supported_arch = ('arm64', 'aarch64') if osx else ('x86_64', 'amd64')
+    if host_arch not in supported_arch:
+        raise SystemExit('Desktop builds support only Windows/Linux x86_64 and macOS Apple Silicon')
     global skip_cargo
     parser = make_parser()
     args = parser.parse_args()

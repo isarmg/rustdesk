@@ -1,7 +1,5 @@
 use super::{validate_install_app_name, CursorData, ResultType};
 use crate::{
-    common::PORTABLE_APPNAME_RUNTIME_ENV_KEY,
-    custom_server::*,
     ipc,
     privacy_mode::win_topmost_window::{self, WIN_TOPMOST_INJECTED_PROCESS_EXE},
 };
@@ -39,9 +37,7 @@ use winapi::{
     um::{
         errhandlingapi::GetLastError,
         handleapi::{CloseHandle, INVALID_HANDLE_VALUE},
-        libloaderapi::{
-            GetProcAddress, LoadLibraryA, LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32,
-        },
+        libloaderapi::{GetProcAddress, LoadLibraryExA, LOAD_LIBRARY_SEARCH_SYSTEM32},
         minwinbase::STILL_ACTIVE,
         processthreadsapi::{
             GetCurrentProcess, GetCurrentProcessId, GetExitCodeProcess, OpenProcess,
@@ -568,8 +564,8 @@ extern "C" {
     ) -> BOOL;
     fn selectInputDesktop() -> BOOL;
     fn inputDesktopSelected() -> BOOL;
+    fn is_supported_windows() -> BOOL;
     fn is_windows_server() -> BOOL;
-    fn is_windows_10_or_greater() -> BOOL;
     fn handleMask(
         out: *mut u8,
         mask: *const u8,
@@ -1289,17 +1285,15 @@ fn is_session_prelogin(session_id: u32) -> Option<bool> {
     Some(username.is_empty() || username == "SYSTEM")
 }
 
-// Windows 7 and Server 2008 R2 report LOCK and UNLOCK the other way round (see WTSINFOEX_LEVEL1).
 fn is_session_locked_flag(session_id: u32) -> Option<bool> {
     extern "C" {
         fn get_session_flags(session_id: DWORD) -> DWORD;
     }
     const WTS_SESSIONSTATE_LOCK: DWORD = 0;
     const WTS_SESSIONSTATE_UNLOCK: DWORD = 1;
-    let reversed = !base::platform::windows::is_windows_version_or_greater(6, 2, 0, 0, 0);
     match unsafe { get_session_flags(session_id) } {
-        WTS_SESSIONSTATE_LOCK => Some(!reversed),
-        WTS_SESSIONSTATE_UNLOCK => Some(reversed),
+        WTS_SESSIONSTATE_LOCK => Some(true),
+        WTS_SESSIONSTATE_UNLOCK => Some(false),
         _ => None,
     }
 }
@@ -1676,13 +1670,6 @@ if exist \"{tmp_path}\\{app_name} Tray.lnk\" del /f /q \"{tmp_path}\\{app_name} 
         "
     );
     let src_exe = cur_exe.clone();
-
-    // potential bug here: if run_cmd cancelled, but config file is changed.
-    if let Some(lic) = get_license() {
-        Config::set_option("key".into(), lic.key);
-        Config::set_option("custom-rendezvous-server".into(), lic.host);
-        Config::set_option("api-server".into(), lic.api);
-    }
 
     let tray_shortcuts = if config::is_outgoing_only() {
         "".to_owned()
@@ -2063,30 +2050,16 @@ pub fn prepare_custom_client_update() -> ResultType<bool> {
     Ok(true)
 }
 
-pub fn get_license_from_exe_name() -> ResultType<CustomServer> {
-    let mut exe = std::env::current_exe()?.to_str().unwrap_or("").to_owned();
-    // if defined portable appname entry, replace original executable name with it.
-    if let Ok(portable_exe) = std::env::var(PORTABLE_APPNAME_RUNTIME_ENV_KEY) {
-        exe = portable_exe;
-    }
-    get_custom_server_from_string(&exe)
-}
-
 #[inline]
 pub fn is_win_server() -> bool {
     unsafe { is_windows_server() > 0 }
 }
 
-#[inline]
-pub fn is_win_10_or_greater() -> bool {
-    unsafe { is_windows_10_or_greater() > 0 }
-}
-
 pub fn bootstrap() -> bool {
-    if let Ok(lic) = get_license_from_exe_name() {
-        *config::EXE_RENDEZVOUS_SERVER.write().unwrap() = lic.host.clone();
+    if unsafe { is_supported_windows() } == FALSE {
+        eprintln!("RustDesk requires Windows 11 (build 22000 or newer) on x86_64.");
+        return false;
     }
-
     #[cfg(debug_assertions)]
     {
         true
@@ -2094,12 +2067,7 @@ pub fn bootstrap() -> bool {
     #[cfg(not(debug_assertions))]
     {
         // This function will cause `'sciter.dll' was not found neither in PATH nor near the current executable.` when debugging RustDesk.
-        // Only call set_safe_load_dll() on Windows 10 or greater
-        if is_win_10_or_greater() {
-            set_safe_load_dll()
-        } else {
-            true
-        }
+        set_safe_load_dll()
     }
 }
 
@@ -3964,22 +3932,6 @@ pub fn alloc_console() {
     }
 }
 
-fn get_license() -> Option<CustomServer> {
-    let mut lic: CustomServer = Default::default();
-    if let Ok(tmp) = get_license_from_exe_name() {
-        lic = tmp;
-    } else {
-        // for back compatibility from migrating from <= 1.2.1 to 1.2.2
-        lic.key = get_reg("Key");
-        lic.host = get_reg("Host");
-        lic.api = get_reg("Api");
-    }
-    if lic.key.is_empty() || lic.host.is_empty() {
-        return None;
-    }
-    Some(lic)
-}
-
 pub struct WallPaperRemover {
     old_path: String,
 }
@@ -4136,15 +4088,11 @@ pub fn try_kill_rustdesk_main_window_process() -> ResultType<()> {
 fn nt_terminate_process(process_id: DWORD) -> ResultType<()> {
     type NtTerminateProcess = unsafe extern "system" fn(HANDLE, DWORD) -> DWORD;
     unsafe {
-        let h_module = if is_win_10_or_greater() {
-            LoadLibraryExA(
-                CString::new("ntdll.dll")?.as_ptr(),
-                std::ptr::null_mut(),
-                LOAD_LIBRARY_SEARCH_SYSTEM32,
-            )
-        } else {
-            LoadLibraryA(CString::new("ntdll.dll")?.as_ptr())
-        };
+        let h_module = LoadLibraryExA(
+            CString::new("ntdll.dll")?.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_SEARCH_SYSTEM32,
+        );
         if !h_module.is_null() {
             let f_nt_terminate_process: NtTerminateProcess = std::mem::transmute(GetProcAddress(
                 h_module,

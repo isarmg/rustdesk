@@ -950,10 +950,6 @@ impl InvokeUiSession for FlutterHandler {
         self.push_event("clipboard", &[("content", &content)], &[]);
     }
 
-    fn switch_back(&self, peer_id: &str) {
-        self.push_event("switch_back", &[("peer_id", peer_id)], &[]);
-    }
-
     fn portable_service_running(&self, running: bool) {
         self.push_event(
             "portable_service_running",
@@ -1084,8 +1080,6 @@ pub fn session_add_existed(
 pub fn session_add(
     session_id: &SessionID,
     id: &str,
-    switch_uuid: &str,
-    force_relay: bool,
     password: String,
     is_shared_password: bool,
     conn_token: Option<String>,
@@ -1120,17 +1114,9 @@ pub fn session_add(
         ..Default::default()
     };
 
-    let switch_uuid = if switch_uuid.is_empty() {
-        None
-    } else {
-        Some(switch_uuid.to_string())
-    };
-
     session.lc.write().unwrap().initialize(
         id.to_owned(),
         conn_type,
-        switch_uuid,
-        force_relay,
         get_adapter_luid(),
         shared_password,
         conn_token,
@@ -1255,14 +1241,10 @@ fn send_clipboard_msg_impl(msg: Message, except_session_id: Option<u64>) {
 }
 
 // Server Side
-#[cfg(not(any(target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod connection_manager {
     use std::collections::HashMap;
 
-    #[cfg(any(target_os = "android"))]
-    use hbb_common::log;
-    #[cfg(any(target_os = "android"))]
-    use scrap::android::call_main_service_set_by_name;
     use serde_json::json;
 
     use crate::ui_cm_interface::InvokeUiCM;
@@ -1275,13 +1257,6 @@ pub mod connection_manager {
     impl InvokeUiCM for FlutterHandler {
         fn add_connection(&self, client: &crate::ui_cm_interface::Client) {
             let client_json = serde_json::to_string(&client).unwrap_or("".into());
-            // send to Android service, active notification no matter UI is shown or not.
-            #[cfg(target_os = "android")]
-            if let Err(e) =
-                call_main_service_set_by_name("add_connection", Some(&client_json), None)
-            {
-                log::debug!("call_main_service_set_by_name fail,{}", e);
-            }
             // send to UI, refresh widget
             self.push_event("add_connection", &[("client", &client_json)]);
         }
@@ -1346,21 +1321,6 @@ pub mod connection_manager {
     pub fn cm_init() {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         start_listen_ipc();
-    }
-
-    #[cfg(target_os = "android")]
-    use hbb_common::tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-
-    #[cfg(target_os = "android")]
-    pub fn start_channel(
-        rx: UnboundedReceiver<crate::ipc::Data>,
-        tx: UnboundedSender<crate::ipc::Data>,
-    ) {
-        use crate::ui_cm_interface::start_listen;
-        let cm = crate::ui_cm_interface::ConnectionManager {
-            ui_handler: FlutterHandler {},
-        };
-        std::thread::spawn(move || start_listen(cm, rx, tx));
     }
 }
 
@@ -2047,72 +2007,5 @@ pub mod sessions {
                 && s.session_handlers.read().unwrap().len() != 0
                 && s.connection_round_state.lock().unwrap().is_connected()
         })
-    }
-}
-
-pub(super) mod async_tasks {
-    use hbb_common::{bail, tokio, ResultType};
-    use std::{
-        collections::HashMap,
-        sync::{
-            mpsc::{sync_channel, SyncSender},
-            Arc, Mutex,
-        },
-    };
-
-    type TxQueryOnlines = SyncSender<Vec<String>>;
-    lazy_static::lazy_static! {
-        static ref TX_QUERY_ONLINES: Arc<Mutex<Option<TxQueryOnlines>>> = Default::default();
-    }
-
-    #[inline]
-    pub fn start_flutter_async_runner() {
-        std::thread::spawn(start_flutter_async_runner_);
-    }
-
-    #[allow(dead_code)]
-    pub fn stop_flutter_async_runner() {
-        let _ = TX_QUERY_ONLINES.lock().unwrap().take();
-    }
-
-    #[tokio::main(flavor = "current_thread")]
-    async fn start_flutter_async_runner_() {
-        // Only one task is allowed to run at the same time.
-        let (tx_onlines, rx_onlines) = sync_channel::<Vec<String>>(1);
-        TX_QUERY_ONLINES.lock().unwrap().replace(tx_onlines);
-
-        loop {
-            match rx_onlines.recv() {
-                Ok(ids) => {
-                    crate::client::peer_online::query_online_states(ids, handle_query_onlines).await
-                }
-                _ => {
-                    // unreachable!
-                    break;
-                }
-            }
-        }
-    }
-
-    pub fn query_onlines(ids: Vec<String>) -> ResultType<()> {
-        if let Some(tx) = TX_QUERY_ONLINES.lock().unwrap().as_ref() {
-            // Ignore if the channel is full.
-            let _ = tx.try_send(ids)?;
-        } else {
-            bail!("No tx_query_onlines");
-        }
-        Ok(())
-    }
-
-    fn handle_query_onlines(onlines: Vec<String>, offlines: Vec<String>) {
-        let data = HashMap::from([
-            ("name", "callback_query_onlines".to_owned()),
-            ("onlines", onlines.join(",")),
-            ("offlines", offlines.join(",")),
-        ]);
-        let _res = super::push_global_event(
-            super::APP_TYPE_MAIN,
-            serde_json::ser::to_string(&data).unwrap_or("".to_owned()),
-        );
     }
 }

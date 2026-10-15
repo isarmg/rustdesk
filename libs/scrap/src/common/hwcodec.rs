@@ -25,6 +25,9 @@ use hwcodec::{
     },
 };
 
+#[cfg(windows)]
+pub use hwcodec::common::child_exit_when_parent_exit;
+
 const DEFAULT_PIXFMT: AVPixelFormat = AVPixelFormat::AV_PIX_FMT_NV12;
 pub const DEFAULT_FPS: i32 = 30;
 const DEFAULT_GOP: i32 = i32::MAX;
@@ -101,7 +104,10 @@ impl EncoderApi for HwRamEncoder {
                         bitrate,
                         config,
                     }),
-                    Err(_) => Err(anyhow!(format!("Failed to create encoder"))),
+                    Err(err) => Err(anyhow!(
+                        "Failed to create hardware encoder {}: {err:?}",
+                        config.name
+                    )),
                 }
             }
             _ => Err(anyhow!("encoder type mismatch")),
@@ -280,26 +286,6 @@ impl HwRamEncoder {
     }
 
     pub fn check_bitrate_range(_config: &HwRamEncoderConfig, bitrate: u32) -> u32 {
-        #[cfg(target_os = "android")]
-        if _config.name.contains("mediacodec") {
-            let info = crate::android::ffi::get_codec_info();
-            if let Some(info) = info {
-                if let Some(codec) = info
-                    .codecs
-                    .iter()
-                    .find(|c| Some(c.name.clone()) == _config.mc_name && c.is_encoder)
-                {
-                    if codec.max_bitrate > codec.min_bitrate {
-                        if bitrate > codec.max_bitrate {
-                            return codec.max_bitrate;
-                        }
-                        if bitrate < codec.min_bitrate {
-                            return codec.min_bitrate;
-                        }
-                    }
-                }
-            }
-        }
         bitrate
     }
 }
@@ -311,38 +297,15 @@ pub struct HwRamDecoder {
 
 impl HwRamDecoder {
     pub fn try_get(format: CodecFormat) -> Option<CodecInfo> {
-        let mut info = None;
-        let soft = CodecInfo::soft();
+        if !enable_hwcodec_option() {
+            return None;
+        }
+        let best = CodecInfo::prioritized(HwCodecConfig::get().ram_decode);
         match format {
-            CodecFormat::H264 => {
-                if let Some(v) = soft.h264 {
-                    info = Some(v);
-                }
-            }
-            CodecFormat::H265 => {
-                if let Some(v) = soft.h265 {
-                    info = Some(v);
-                }
-            }
-            _ => {}
+            CodecFormat::H264 => best.h264,
+            CodecFormat::H265 => best.h265,
+            _ => None,
         }
-        if enable_hwcodec_option() {
-            let best = CodecInfo::prioritized(HwCodecConfig::get().ram_decode);
-            match format {
-                CodecFormat::H264 => {
-                    if let Some(v) = best.h264 {
-                        info = Some(v);
-                    }
-                }
-                CodecFormat::H265 => {
-                    if let Some(v) = best.h265 {
-                        info = Some(v);
-                    }
-                }
-                _ => {}
-            }
-        }
-        info
     }
 
     pub fn new(format: CodecFormat) -> ResultType<Self> {
@@ -476,17 +439,6 @@ impl HwRamDecoderImage<'_> {
     }
 }
 
-#[cfg(target_os = "android")]
-fn get_mime_type(codec: DataFormat) -> &'static str {
-    match codec {
-        DataFormat::VP8 => "video/x-vnd.on2.vp8",
-        DataFormat::VP9 => "video/x-vnd.on2.vp9",
-        DataFormat::AV1 => "video/av01",
-        DataFormat::H264 => "video/avc",
-        DataFormat::H265 => "video/hevc",
-    }
-}
-
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct HwCodecConfig {
     #[serde(default)]
@@ -512,10 +464,7 @@ struct HwCodecConfig2 {
     pub config: String,
 }
 
-// ipc server process start check process once, other process get from ipc server once
-// install: --server start check process, check process send to --server,  ui get from --server
-// portable: ui start check process, check process send to ui
-// sciter and unilink: get from ipc server
+// Hosts retain IPC-based probing; clients independently probe before their first connection.
 impl HwCodecConfig {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn set(config: String) {
@@ -534,71 +483,6 @@ impl HwCodecConfig {
     }
 
     pub fn get() -> HwCodecConfig {
-        #[cfg(target_os = "android")]
-        {
-            let info = crate::android::ffi::get_codec_info();
-            log::info!("all codec info: {info:?}");
-            struct T {
-                name_prefix: &'static str,
-                data_format: DataFormat,
-            }
-            let ts = vec![
-                T {
-                    name_prefix: "h264",
-                    data_format: DataFormat::H264,
-                },
-                T {
-                    name_prefix: "hevc",
-                    data_format: DataFormat::H265,
-                },
-            ];
-            let mut e = vec![];
-            if let Some(info) = info {
-                ts.iter().for_each(|t| {
-                    let codecs: Vec<_> = info
-                        .codecs
-                        .iter()
-                        .filter(|c| {
-                            c.is_encoder
-                                && c.mime_type.as_str() == get_mime_type(t.data_format)
-                                && c.nv12
-                                && c.hw == Some(true) //only use hardware codec
-                        })
-                        .collect();
-                    let screen_wh = std::cmp::max(info.w, info.h);
-                    let mut best = None;
-                    if let Some(codec) = codecs
-                        .iter()
-                        .find(|c| c.max_width >= screen_wh && c.max_height >= screen_wh)
-                    {
-                        best = Some(codec.name.clone());
-                    } else {
-                        // find the max resolution
-                        let mut max_area = 0;
-                        for codec in codecs.iter() {
-                            if codec.max_width * codec.max_height > max_area {
-                                best = Some(codec.name.clone());
-                                max_area = codec.max_width * codec.max_height;
-                            }
-                        }
-                    }
-                    if let Some(best) = best {
-                        e.push(CodecInfo {
-                            name: format!("{}_mediacodec", t.name_prefix),
-                            mc_name: Some(best),
-                            format: t.data_format,
-                            hwdevice: hwcodec::ffmpeg::AVHWDeviceType::AV_HWDEVICE_TYPE_NONE,
-                            priority: 0,
-                        });
-                    }
-                });
-            }
-            log::debug!("e: {e:?}");
-            HwCodecConfig {
-                ram_encode: e,
-                ..Default::default()
-            }
-        }
         #[cfg(any(windows, target_os = "macos"))]
         {
             let config = CONFIG.lock().unwrap().clone();
@@ -628,7 +512,7 @@ impl HwCodecConfig {
         {
             CONFIG.lock().unwrap().clone().unwrap_or_default()
         }
-        #[cfg(target_os = "ios")]
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         {
             HwCodecConfig::default()
         }
@@ -651,8 +535,6 @@ impl HwCodecConfig {
 
     pub fn clear(vram: bool, encode: bool) {
         log::info!("clear hwcodec config, vram: {vram}, encode: {encode}");
-        #[cfg(target_os = "android")]
-        crate::android::ffi::clear_codec_info();
         #[cfg(not(target_os = "android"))]
         {
             let mut c = CONFIG.lock().unwrap();

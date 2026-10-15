@@ -34,6 +34,7 @@ pub const OPTION_TEXTURE_RENDER_HEALTH: &str = "texture-render-health";
 pub const OPTION_ALLOW_D3D_RENDER: &str = "allow-d3d-render";
 pub const OPTION_ENABLE_CHECK_UPDATE: &str = "enable-check-update";
 pub const OPTION_ALLOW_AUTO_UPDATE: &str = "allow-auto-update";
+pub const OPTION_UPDATE_URL: &str = "update-url";
 pub const OPTION_SYNC_AB_WITH_RECENT_SESSIONS: &str = "sync-ab-with-recent-sessions";
 pub const OPTION_SYNC_AB_TAGS: &str = "sync-ab-tags";
 pub const OPTION_FILTER_AB_BY_INTERSECTION: &str = "filter-ab-by-intersection";
@@ -76,9 +77,7 @@ pub const OPTION_ENABLE_HWCODEC: &str = "enable-hwcodec";
 pub const OPTION_APPROVE_MODE: &str = "approve-mode";
 pub const OPTION_VERIFICATION_METHOD: &str = "verification-method";
 pub const OPTION_TEMPORARY_PASSWORD_LENGTH: &str = "temporary-password-length";
-pub const OPTION_CUSTOM_RENDEZVOUS_SERVER: &str = "custom-rendezvous-server";
 pub const OPTION_API_SERVER: &str = "api-server";
-pub const OPTION_KEY: &str = "key";
 pub const OPTION_PRESET_ADDRESS_BOOK_NAME: &str = "preset-address-book-name";
 pub const OPTION_PRESET_ADDRESS_BOOK_TAG: &str = "preset-address-book-tag";
 pub const OPTION_PRESET_ADDRESS_BOOK_ALIAS: &str = "preset-address-book-alias";
@@ -102,7 +101,6 @@ pub const OPTION_AV1_TEST: &str = "av1-test";
 /// - If set to 0, a safe built-in default is used (see DEFAULT_MAX_VALIDATED_FILES).
 /// - If unset, negative, or non-integer, no explicit limit is enforced for backward compatibility.
 pub const OPTION_FILE_TRANSFER_MAX_FILES: &str = "file-transfer-max-files";
-pub const OPTION_DISABLE_UDP: &str = "disable-udp";
 pub const OPTION_SHOW_VIRTUAL_MOUSE: &str = "show-virtual-mouse";
 // joystick is the virtual mouse.
 // So `OPTION_SHOW_VIRTUAL_MOUSE` should also be set if `OPTION_SHOW_VIRTUAL_JOYSTICK` is set.
@@ -120,22 +118,11 @@ pub const OPTION_REMOVE_PRESET_PASSWORD_WARNING: &str = "remove-preset-password-
 pub const OPTION_HIDE_GENERAL_SETTINGS: &str = "hide-general-settings";
 pub const OPTION_HIDE_SECURITY_SETTINGS: &str = "hide-security-settings";
 pub const OPTION_HIDE_NETWORK_SETTINGS: &str = "hide-network-settings";
-pub const OPTION_HIDE_SERVER_SETTINGS: &str = "hide-server-settings";
-pub const OPTION_HIDE_PROXY_SETTINGS: &str = "hide-proxy-settings";
 pub const OPTION_HIDE_REMOTE_PRINTER_SETTINGS: &str = "hide-remote-printer-settings";
-pub const OPTION_HIDE_WEBSOCKET_SETTINGS: &str = "hide-websocket-settings";
 pub const OPTION_HIDE_STOP_SERVICE: &str = "hide-stop-service";
 pub const OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED: &str =
     "allow-command-line-settings-when-settings-disabled";
 
-// Connection punch-through / port-forward options
-pub const OPTION_ENABLE_TCP_PUNCH: &str = "enable-tcp-punch";
-pub const OPTION_ENABLE_UDP_PUNCH: &str = "enable-udp-punch";
-pub const OPTION_ENABLE_IPV6_PUNCH: &str = "enable-ipv6-punch";
-pub const OPTION_ENABLE_PORT_FORWARD_MUX: &str = "enable-port-forward-mux";
-pub const OPTION_ENABLE_WEBRTC: &str = "enable-webrtc";
-pub const OPTION_RELAY_FALLBACK_DELAY: &str = "relay-fallback-delay";
-pub const OPTION_ALLOW_KCP_CC: &str = "allow-kcp-congestion-control";
 pub const OPTION_HIDE_USERNAME_ON_CARD: &str = "hide-username-on-card";
 pub const OPTION_HIDE_HELP_CARDS: &str = "hide-help-cards";
 pub const OPTION_DEFAULT_CONNECT_PASSWORD: &str = "default-connect-password";
@@ -143,10 +130,8 @@ pub const OPTION_HIDE_TRAY: &str = "hide-tray";
 pub const OPTION_ONE_WAY_CLIPBOARD_REDIRECTION: &str = "one-way-clipboard-redirection";
 pub const OPTION_ALLOW_LOGON_SCREEN_PASSWORD: &str = "allow-logon-screen-password";
 pub const OPTION_ALLOW_DEEP_LINK_PASSWORD: &str = "allow-deep-link-password";
-pub const OPTION_ALLOW_DEEP_LINK_SERVER_SETTINGS: &str = "allow-deep-link-server-settings";
 pub const OPTION_ONE_WAY_FILE_TRANSFER: &str = "one-way-file-transfer";
 pub const OPTION_ALLOW_HTTPS_21114: &str = "allow-https-21114";
-pub const OPTION_USE_RAW_TCP_FOR_API: &str = "use-raw-tcp-for-api";
 pub const OPTION_HIDE_POWERED_BY_ME: &str = "hide-powered-by-me";
 pub const OPTION_MAIN_WINDOW_ALWAYS_ON_TOP: &str = "main-window-always-on-top";
 
@@ -259,12 +244,6 @@ pub const KEYS_LOCAL_SETTINGS: &[&str] = &[
     OPTION_ALLOW_AUTO_RECORD_OUTGOING,
     OPTION_HIDE_RECORDING_BUTTON,
     OPTION_VIDEO_SAVE_DIRECTORY,
-    OPTION_ENABLE_TCP_PUNCH,
-    OPTION_ENABLE_UDP_PUNCH,
-    OPTION_ENABLE_IPV6_PUNCH,
-    OPTION_ENABLE_PORT_FORWARD_MUX,
-    OPTION_ENABLE_WEBRTC,
-    OPTION_RELAY_FALLBACK_DELAY,
     OPTION_TOUCH_MODE,
     OPTION_SHOW_VIRTUAL_MOUSE,
     OPTION_SHOW_VIRTUAL_JOYSTICK,
@@ -291,7 +270,6 @@ pub const KEYS_SETTINGS: &[&str] = &[
     OPTION_ALLOW_REMOTE_CONFIG_MODIFICATION,
     OPTION_ALLOW_NUMERNIC_ONE_TIME_PASSWORD,
     OPTION_ENABLE_LAN_DISCOVERY,
-    OPTION_DIRECT_SERVER,
     OPTION_DIRECT_ACCESS_PORT,
     OPTION_WHITELIST,
     OPTION_ID_WHITELIST,
@@ -307,13 +285,7 @@ pub const KEYS_SETTINGS: &[&str] = &[
     OPTION_APPROVE_MODE,
     OPTION_VERIFICATION_METHOD,
     OPTION_TEMPORARY_PASSWORD_LENGTH,
-    OPTION_PROXY_URL,
-    OPTION_PROXY_USERNAME,
-    OPTION_PROXY_PASSWORD,
-    OPTION_CUSTOM_RENDEZVOUS_SERVER,
     OPTION_API_SERVER,
-    OPTION_KEY,
-    OPTION_ALLOW_WEBSOCKET,
     OPTION_PRESET_ADDRESS_BOOK_NAME,
     OPTION_PRESET_ADDRESS_BOOK_TAG,
     OPTION_PRESET_ADDRESS_BOOK_ALIAS,
@@ -325,14 +297,10 @@ pub const KEYS_SETTINGS: &[&str] = &[
     OPTION_ENABLE_DIRECTX_CAPTURE,
     OPTION_ENABLE_ANDROID_SOFTWARE_ENCODING_HALF_SCALE,
     OPTION_ENABLE_TRUSTED_DEVICES,
-    OPTION_RELAY_SERVER,
-    OPTION_ICE_SERVERS,
-    OPTION_DISABLE_UDP,
     OPTION_ALLOW_INSECURE_TLS_FALLBACK,
     OPTION_KEEP_AWAKE_DURING_INCOMING_SESSIONS,
     OPTION_ALLOW_AUTO_UPDATE,
-    OPTION_ALLOW_KCP_CC,
-    OPTION_ALLOW_WEBRTC_CC,
+    OPTION_UPDATE_URL,
 ];
 
 // BUILDIN_SETTINGS
@@ -346,10 +314,7 @@ pub const KEYS_BUILDIN_SETTINGS: &[&str] = &[
     OPTION_HIDE_GENERAL_SETTINGS,
     OPTION_HIDE_SECURITY_SETTINGS,
     OPTION_HIDE_NETWORK_SETTINGS,
-    OPTION_HIDE_SERVER_SETTINGS,
-    OPTION_HIDE_PROXY_SETTINGS,
     OPTION_HIDE_REMOTE_PRINTER_SETTINGS,
-    OPTION_HIDE_WEBSOCKET_SETTINGS,
     OPTION_HIDE_STOP_SERVICE,
     OPTION_HIDE_USERNAME_ON_CARD,
     OPTION_HIDE_HELP_CARDS,
@@ -358,7 +323,6 @@ pub const KEYS_BUILDIN_SETTINGS: &[&str] = &[
     OPTION_ONE_WAY_CLIPBOARD_REDIRECTION,
     OPTION_ALLOW_LOGON_SCREEN_PASSWORD,
     OPTION_ALLOW_DEEP_LINK_PASSWORD,
-    OPTION_ALLOW_DEEP_LINK_SERVER_SETTINGS,
     OPTION_ONE_WAY_FILE_TRANSFER,
     OPTION_ALLOW_HTTPS_21114,
     OPTION_ALLOW_HOSTNAME_AS_ID,
@@ -369,7 +333,6 @@ pub const KEYS_BUILDIN_SETTINGS: &[&str] = &[
     OPTION_DISABLE_CHANGE_PERMANENT_PASSWORD,
     OPTION_DISABLE_CHANGE_ID,
     OPTION_DISABLE_UNLOCK_PIN,
-    OPTION_USE_RAW_TCP_FOR_API,
     OPTION_ENABLE_PERM_CHANGE_IN_ACCEPT_WINDOW,
     OPTION_HIDE_ELEVATE_BUTTON_IN_ACCEPT_WINDOW,
     OPTION_ALLOW_COMMAND_LINE_SETTINGS_WHEN_SETTINGS_DISABLED,

@@ -13,17 +13,6 @@ use crate::{
 // Empirical no-data window before exposing the restart reconnect state to the UI.
 // Restart msgbox text is kept as a legacy UI fallback; Flutter handles the type as a control event.
 const RESTART_REMOTE_DEVICE_NO_DATA_TIMEOUT: Duration = Duration::from_secs(5);
-const KCP_CLOSE_REASON_FLUSH_DELAY: Duration = Duration::from_millis(30);
-// Deadline for the parting close-reason send once the peer is presumed gone; KCP waits for send
-// capacity with no deadline of its own.
-const KCP_CLOSE_REASON_GONE_DEADLINE: Duration = Duration::from_millis(500);
-// Grace after ICE reports Disconnected, which it does ~5s after it stops hearing from the peer,
-// for ~8s in total. Disconnected is transient by design, so this waits out a Wi-Fi roam or a
-// sleep/wake rather than acting on the first hint.
-const WEBRTC_SUSPECT_GRACE: Duration = Duration::from_secs(3);
-// KCP gets no such hint, only how long since a packet arrived; its endpoint pings an idle peer
-// about every 2s, so this is several missed pings, and matches the 8s WebRTC arrives at.
-const KCP_PEER_SILENCE_LIMIT: Duration = Duration::from_secs(8);
 use base::message_proto::{permission_info::Permission, *};
 use crossbeam_queue::ArrayQueue;
 use hbb_common::{
@@ -115,61 +104,50 @@ impl<T: InvokeUiSession> Remote<T> {
         }
     }
 
-    pub async fn io_loop(&mut self, key: &str, token: &str, round: u32) {
+    pub async fn io_loop(&mut self, round: u32) {
+        #[cfg(all(feature = "hwcodec", not(any(target_os = "android", target_os = "ios"))))]
+        if let Err(err) = tokio::task::spawn_blocking(client::get_hwcodec_config).await {
+            log::error!("Local hardware codec probe task failed: {err}");
+        }
         let mut received = false;
         let conn_type = self.handler.lc.read().unwrap().conn_type;
         match Client::start(
             &self.handler.get_id(),
-            key,
-            token,
             conn_type,
             self.handler.clone(),
         )
         .await
         {
-            Ok(((mut peer, direct, pk, kcp, stream_type), (feedback, rendezvous_server))) => {
+            Ok((mut peer, pk, stream_type)) => {
+                let direct = true;
                 self.handler
                     .connection_round_state
                     .lock()
                     .unwrap()
                     .set_connected();
                 let is_secured = peer.is_secured();
-                // Only WebRTC needs refining: its label names the transport that won the race,
-                // not the family ICE ended up nominating, and it is the one path where the two
-                // can disagree with the address the rendezvous observed.
-                let stream_type = if peer.webrtc_remote_ipv6().await.unwrap_or(false) {
-                    "WebRTC/IPv6"
-                } else {
-                    stream_type
-                };
                 self.handler
                     .set_connection_type(is_secured, direct, stream_type); // flutter -> connection_ready
-                if !is_secured
-                    && !crate::common::is_direct_ip_access(&self.handler.get_id())
-                    && !client::confirm_insecure_connection(&self.handler, &mut self.receiver).await
-                {
-                    self.send_close_reason(&mut peer, "").await;
-                    if kcp.is_some() {
-                        tokio::time::sleep(KCP_CLOSE_REASON_FLUSH_DELAY).await;
-                    }
+                if !is_secured || !client::confirm_direct_identity(
+                    &self.handler, &mut self.receiver, &pk,
+                ).await {
+                    self.send_close_reason(&mut peer, "Device identity was not trusted").await;
                     self.handle_disconnected(round);
                     return;
                 }
+                peer.set_max_packet_length(usize::MAX);
                 self.handler.update_direct(Some(direct));
                 if conn_type == ConnType::DEFAULT_CONN {
                     self.handler
-                        .set_fingerprint(crate::common::pk_to_fingerprint(pk.unwrap_or_default()));
+                        .set_fingerprint(crate::common::pk_to_fingerprint(pk));
                 }
 
                 let mut status_timer =
                     crate::rustdesk_interval(time::interval(Duration::new(1, 0)));
                 let mut fps_instant = Instant::now();
 
-                let _keep_it = client::hc_connection(feedback, rendezvous_server, token).await;
                 let mut last_recv_time = Instant::now();
-                let mut webrtc_suspect_since: Option<Instant> = None;
-                let mut last_rx_progress = peer.rx_progress();
-                let mut peer_gone = false;
+
 
                 loop {
                     tokio::select! {
@@ -177,7 +155,7 @@ impl<T: InvokeUiSession> Remote<T> {
                             if let Some(res) = res {
                                 match res {
                                     Err(err) => {
-                                        self.handler.on_establish_connection_error(err.to_string());
+                                        self.handler.on_establish_connection_error(format!("{err:#}"));
                                         break;
                                     }
                                     Ok(ref bytes) => {
@@ -223,37 +201,6 @@ impl<T: InvokeUiSession> Remote<T> {
                                 self.handler.msgbox("restarting-show", "Restarting remote device", "Connection in progress. Please wait.", "");
                                 break;
                             }
-                            let rx_progress = peer.rx_progress();
-                            // `None` for transports that report none, and it never changes for a
-                            // given one, so they are inert here.
-                            let progressed = rx_progress != last_rx_progress;
-                            last_rx_progress = rx_progress;
-                            if peer.webrtc_disconnected() && !progressed {
-                                webrtc_suspect_since.get_or_insert_with(Instant::now);
-                            } else {
-                                webrtc_suspect_since = None;
-                            }
-                            // Neither limit is a hard upper bound. A send is awaited inline in
-                            // this loop, so one in progress delays this tick - bounded on WebRTC
-                            // by the timeout the stream was built with, not bounded at all on
-                            // KCP. The 30s watchdog above shares the loop and the same delay.
-                            peer_gone = webrtc_suspect_since
-                                .map_or(false, |since| since.elapsed() >= WEBRTC_SUSPECT_GRACE)
-                                || kcp
-                                    .as_ref()
-                                    .and_then(|k| k.peer_silent_for())
-                                    .map_or(false, |silent| silent >= KCP_PEER_SILENCE_LIMIT);
-                            if peer_gone {
-                                log::info!("Peer stopped answering, reconnecting");
-                                #[cfg(feature = "flutter")]
-                                self.handler.msgbox("restarting-show", "Connecting...", "Connection in progress. Please wait.", "");
-                                // Sciter knows no `restarting-show` and would show a dialog that
-                                // waits for a click, where the timeout this arrives ahead of is
-                                // retryable and reconnects on its own. Keep that message for it.
-                                #[cfg(not(feature = "flutter"))]
-                                self.handler.msgbox("error", "Connection Error", "Timeout", "");
-                                break;
-                            }
                             let elapsed = fps_instant.elapsed().as_millis();
                             if elapsed < 1000 {
                                 continue;
@@ -294,21 +241,10 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 log::debug!("Exit io_loop of id={}", self.handler.get_id());
-                if kcp.is_some() {
-                    // Attempted rather than skipped even here: if the loss was one-way the peer
-                    // does get it, and drops its side instead of waiting out its own timeout.
-                    if peer_gone {
-                        peer.set_send_timeout(KCP_CLOSE_REASON_GONE_DEADLINE.as_millis() as u64);
-                    }
-                    // Send the close reason if it hasn't been sent yet, as KCP cannot detect the socket close event.
-                    self.send_close_reason(&mut peer, "kcp").await;
-                    // KCP does not send messages immediately, so wait to ensure the last message is sent.
-                    // 1ms works in my test, but 30ms is more reliable.
-                    tokio::time::sleep(KCP_CLOSE_REASON_FLUSH_DELAY).await;
-                }
+
             }
             Err(err) => {
-                self.handler.on_establish_connection_error(err.to_string());
+                self.handler.on_establish_connection_error(format!("{err:#}"));
             }
         }
         self.handle_disconnected(round);
@@ -712,6 +648,11 @@ impl<T: InvokeUiSession> Remote<T> {
 
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
+            if base::session_protocol::is_legacy_role_switch_message(&msg_in) {
+                self.send_close_reason(peer, "Runtime role switching is not supported")
+                    .await;
+                return false;
+            }
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
                     if !self.first_frame {
@@ -966,6 +907,15 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                     }
                     Some(misc::Union::SwitchDisplay(s)) => {
+                        #[cfg(feature = "mediacodec")]
+                        if s.width > 0 && s.height > 0 {
+                            if let Some(display) = self.handler.lc.write().unwrap().peer_info.as_mut()
+                                .and_then(|peer| peer.displays.get_mut(s.display as usize))
+                            {
+                                display.width = s.width;
+                                display.height = s.height;
+                            }
+                        }
                         self.handler.handle_peer_switch_display(&s);
                         if let Some(thread) = self.video_threads.get_mut(&(s.display as usize)) {
                             thread.video_sender.send(MediaData::Reset).ok();
@@ -1085,24 +1035,6 @@ impl<T: InvokeUiSession> Remote<T> {
                             );
                         }
                     }
-                    #[cfg(feature = "flutter")]
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    Some(misc::Union::SwitchBack(_)) => {
-                        let allow_switch_back = self
-                            .handler
-                            .lc
-                            .write()
-                            .unwrap()
-                            .consume_switch_back_permission();
-                        if allow_switch_back {
-                            self.handler.switch_back(&self.handler.get_id());
-                        } else {
-                            log::warn!(
-                                "Ignored unsolicited SwitchBack from {}",
-                                self.handler.get_id()
-                            );
-                        }
-                    }
                     Some(misc::Union::SupportedEncoding(e)) => {
                         log::info!("update supported encoding:{:?}", e);
                         self.handler.lc.write().unwrap().supported_encoding = e;
@@ -1134,6 +1066,10 @@ impl<T: InvokeUiSession> Remote<T> {
                         .msgbox(&msgbox.msgtype, &msgbox.title, &msgbox.text, &link);
                 }
                 Some(message::Union::PeerInfo(pi)) => {
+                    #[cfg(feature = "mediacodec")]
+                    if let Some(peer) = self.handler.lc.write().unwrap().peer_info.as_mut() {
+                        peer.displays = pi.displays.clone();
+                    }
                     self.handler.set_displays(&pi.displays);
                     self.handler.set_platform_additions(&pi.platform_additions);
                 }
@@ -1604,8 +1540,45 @@ mod tests {
             ConnType::VIEW_CAMERA,
             ConnType::TERMINAL,
         ] {
-            let result = Client::start("", "", "", conn_type, Session::<FlutterHandler>::default()).await;
+            let result = Client::start("", conn_type, Session::<FlutterHandler>::default()).await;
             assert!(matches!(result, Err(err) if err.to_string() == "Unsupported session type"));
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_role_switch_messages_close_before_and_after_login() {
+        let mut request = Message::new();
+        let mut misc = Misc::new();
+        misc.set_switch_sides_request(SwitchSidesRequest::default());
+        request.set_misc(misc);
+        let mut back = Message::new();
+        let mut misc = Misc::new();
+        misc.set_switch_back(SwitchBack::default());
+        back.set_misc(misc);
+        let mut response = Message::new();
+        response.set_switch_sides_response(SwitchSidesResponse::default());
+        for connected in [false, true] {
+            for message in [&request, &back, &response] {
+                let (mut remote, mut peer, mut far) = remote_and_peer().await;
+                remote.is_connected = connected;
+                assert!(
+                    !remote
+                        .handle_msg_from_peer(&message.write_to_bytes().unwrap(), &mut peer)
+                        .await
+                );
+                let bytes = hbb_common::timeout(1000, far.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                let reply = Message::parse_from_bytes(&bytes).unwrap();
+                assert_eq!(
+                    reply.misc().close_reason(),
+                    "Runtime role switching is not supported"
+                );
+                assert_eq!(remote.is_connected, connected);
+                assert!(remote.handler.lc.read().unwrap().password.is_empty());
+            }
         }
     }
 

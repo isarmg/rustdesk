@@ -4,7 +4,7 @@ use crate::flutter;
 use crate::platform::windows::{get_char_from_vk, get_unicode_from_vk};
 use crate::ui_session_interface::{InvokeUiSession, Session};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::{client::get_key_state, common::GrabState};
+use crate::common::GrabState;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::log;
 use base::message_proto::*;
@@ -63,7 +63,7 @@ pub fn set_relative_mouse_mode_state(active: bool) {
 static IS_RDEV_ENABLED: AtomicBool = AtomicBool::new(false);
 
 lazy_static::lazy_static! {
-    static ref TO_RELEASE: Arc<Mutex<HashMap<Key, Event>>> = Arc::new(Mutex::new(HashMap::new()));
+    static ref TO_RELEASE: Arc<Mutex<HashMap<Key, (Event, Option<i32>)>>> = Arc::new(Mutex::new(HashMap::new()));
     static ref MODIFIERS_STATE: Mutex<HashMap<Key, bool>> = {
         let mut m = HashMap::new();
         m.insert(Key::ShiftLeft, false);
@@ -79,6 +79,10 @@ lazy_static::lazy_static! {
 }
 
 pub mod shortcuts;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod state;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use state::{native_key_state, QueryKey};
 
 pub mod client {
     use super::*;
@@ -644,26 +648,26 @@ pub fn is_long_press(event: &Event) -> bool {
     return false;
 }
 
-fn take_remote_keys() -> HashMap<Key, Event> {
+fn take_remote_keys() -> HashMap<Key, (Event, Option<i32>)> {
     let mut to_release = TO_RELEASE.lock().unwrap();
     std::mem::take(&mut *to_release)
 }
 
-fn release_remote_keys_for_events(keyboard_mode: &str, to_release: HashMap<Key, Event>) {
-    for (key, mut event) in to_release.into_iter() {
+fn release_remote_keys_for_events(keyboard_mode: &str, to_release: HashMap<Key, (Event, Option<i32>)>) {
+    for (key, (mut event, lock_modes)) in to_release.into_iter() {
         #[cfg(feature = "flutter")]
         if get_peer_platform() == "Windows" && shortcuts::release_modifier_on_leave(key) {
             continue;
         }
         event.event_type = EventType::KeyRelease(key);
-        client::process_event(keyboard_mode, &event, None);
+        client::process_event(keyboard_mode, &event, lock_modes);
         // If Alt or AltGr is pressed, we need to send another key stoke to release it.
         // Because the controlled side may hold the alt state, if local window is switched by [Alt + Tab].
         if key == Key::Alt || key == Key::AltGr {
             event.event_type = EventType::KeyPress(key);
-            client::process_event(keyboard_mode, &event, None);
+            client::process_event(keyboard_mode, &event, lock_modes);
             event.event_type = EventType::KeyRelease(key);
-            client::process_event(keyboard_mode, &event, None);
+            client::process_event(keyboard_mode, &event, lock_modes);
         }
     }
 }
@@ -808,18 +812,52 @@ fn parse_add_lock_modes_modifiers(
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[derive(Clone, Copy)]
+enum ModifierKey {
+    Alt, Control, RightControl, Shift, RightShift, Meta,
+}
+
+// On Wayland the focused Flutter input stream, not an injection device, owns
+// modifier state. Native hook platforms retain their existing read-only query.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn get_key_state(key: ModifierKey) -> bool {
+    let query = match key {
+        ModifierKey::Alt => QueryKey::Alt,
+        ModifierKey::Control => QueryKey::Control,
+        ModifierKey::RightControl => QueryKey::RightControl,
+        ModifierKey::Shift => QueryKey::Shift,
+        ModifierKey::RightShift => QueryKey::RightShift,
+        ModifierKey::Meta => QueryKey::Meta,
+    };
+    if let Some(pressed) = native_key_state(query) {
+        return pressed;
+    }
+    let keys = MODIFIERS_STATE.lock().unwrap();
+    let pressed = |key| keys.get(&key).copied().unwrap_or(false);
+    match key {
+        ModifierKey::Alt => pressed(Key::Alt) || pressed(Key::AltGr),
+        ModifierKey::Control => pressed(Key::ControlLeft),
+        ModifierKey::RightControl => pressed(Key::ControlRight),
+        ModifierKey::Shift => pressed(Key::ShiftLeft),
+        ModifierKey::RightShift => pressed(Key::ShiftRight),
+        ModifierKey::Meta => pressed(Key::MetaLeft) || pressed(Key::MetaRight),
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn add_lock_modes_modifiers(key_event: &mut KeyEvent, is_numpad_key: bool, is_letter_key: bool) {
-    if is_letter_key && get_key_state(enigo::Key::CapsLock) {
+    if is_letter_key && native_key_state(QueryKey::CapsLock) == Some(true) {
         key_event.modifiers.push(ControlKey::CapsLock.into());
     }
-    if is_numpad_key && get_key_state(enigo::Key::NumLock) {
+    if is_numpad_key && native_key_state(QueryKey::NumLock) == Some(true) {
         key_event.modifiers.push(ControlKey::NumLock.into());
     }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn convert_numpad_keys(key: Key) -> Key {
-    if get_key_state(enigo::Key::NumLock) {
+pub fn convert_numpad_keys(key: Key, num_lock: Option<bool>) -> Key {
+    // Missing compositor state must not turn a synthetic release into a navigation key.
+    if num_lock != Some(false) {
         return key;
     }
     match key {
@@ -835,6 +873,74 @@ pub fn convert_numpad_keys(key: Key) -> Key {
         Key::Kp8 => Key::UpArrow,
         Key::Kp9 => Key::PageUp,
         _ => key,
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod numpad_state_tests {
+    use super::*;
+
+    #[test]
+    fn only_known_num_lock_off_maps_to_navigation() {
+        assert_eq!(convert_numpad_keys(Key::Kp1, Some(false)), Key::End);
+        assert_eq!(convert_numpad_keys(Key::Kp1, Some(true)), Key::Kp1);
+        assert_eq!(convert_numpad_keys(Key::Kp1, None), Key::Kp1);
+        assert_eq!(convert_numpad_keys(Key::KeyA, Some(false)), Key::KeyA);
+    }
+
+    fn keypad_event(down: bool) -> Event {
+        Event {
+            time: std::time::SystemTime::now(),
+            unicode: None,
+            platform_code: 0,
+            position_code: 0,
+            event_type: if down { EventType::KeyPress(Key::Kp1) } else { EventType::KeyRelease(Key::Kp1) },
+            usb_hid: 0,
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            extra_data: 0,
+        }
+    }
+
+    #[test]
+    fn focus_loss_releases_the_same_num_lock_off_key() {
+        let mut pending = HashMap::new();
+        let down_modes = track_pending_release(&mut pending, &keypad_event(true), Some(0), true);
+        let down_key = convert_numpad_keys(Key::Kp1, state::num_lock(down_modes));
+        assert_eq!(down_key, Key::End);
+        // Mirror take_remote_keys and release_remote_keys_for_events: the
+        // focus-loss callback has no new snapshot, so carry the press's own.
+        let taken = std::mem::take(&mut pending);
+        let (mut event, modes) = taken.get(&Key::Kp1).unwrap().clone();
+        event.event_type = EventType::KeyRelease(Key::Kp1);
+        let up_modes = track_pending_release(&mut pending, &event, modes, true);
+        assert_eq!(convert_numpad_keys(Key::Kp1, state::num_lock(up_modes)), down_key);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn other_keys_and_modes_keep_current_lock_state() {
+        let mut pending = HashMap::new();
+        // Map-mode keypad events must not retain the legacy navigation policy.
+        track_pending_release(&mut pending, &keypad_event(true), Some(0), false);
+        assert_eq!(track_pending_release(&mut pending, &keypad_event(true), Some(4), false), Some(4));
+        // Nor should ordinary letters freeze CapsLock across repeat events.
+        let mut letter = keypad_event(true);
+        letter.event_type = EventType::KeyPress(Key::KeyA);
+        track_pending_release(&mut pending, &letter, Some(0), false);
+        assert_eq!(track_pending_release(&mut pending, &letter, Some(2), false), Some(2));
+        // Even when pairing NumLock, preserve this event's CapsLock bit.
+        assert_eq!(track_pending_release(&mut pending, &keypad_event(true), Some(2), true), Some(2));
+        assert_eq!(track_pending_release(&mut pending, &keypad_event(true), Some(4), true), Some(0));
+    }
+
+    #[test]
+    fn repeats_and_lock_changes_preserve_the_press_mapping() {
+        let mut pending = HashMap::new();
+        track_pending_release(&mut pending, &keypad_event(true), Some(0), true);
+        assert_eq!(track_pending_release(&mut pending, &keypad_event(true), Some(4), true), Some(0));
+        let modes = track_pending_release(&mut pending, &keypad_event(false), Some(4), true);
+        assert_eq!(convert_numpad_keys(Key::Kp1, state::num_lock(modes)), Key::End);
+        assert!(pending.is_empty());
     }
 }
 
@@ -856,25 +962,57 @@ fn update_modifiers_state(event: &Event) {
     };
 }
 
+fn track_pending_release(
+    pending: &mut HashMap<Key, (Event, Option<i32>)>,
+    event: &Event,
+    lock_modes: Option<i32>,
+    preserve_num_lock: bool,
+) -> Option<i32> {
+    const NUM_LOCK: i32 = 1 << 2;
+    let recorded = match event.event_type {
+        EventType::KeyPress(key) => {
+            let previous = pending.get(&key).and_then(|(_, modes)| *modes);
+            let modes = if preserve_num_lock {
+                previous.or(lock_modes.map(|modes| modes & NUM_LOCK))
+            } else {
+                None
+            };
+            // Preserve the original latest-event behavior for every key.
+            pending.insert(key, (event.clone(), modes));
+            modes
+        }
+        EventType::KeyRelease(key) => {
+            pending.remove(&key).and_then(|(_, modes)| modes)
+        }
+        _ => None,
+    };
+    if preserve_num_lock {
+        if let Some(recorded) = recorded {
+            // Only the NumLock bit controls the paired navigation mapping.
+            // CapsLock and all other state still come from the current event.
+            return Some((lock_modes.unwrap_or(0) & !NUM_LOCK) | recorded);
+        }
+    }
+    lock_modes
+}
+
 pub fn event_to_key_events(
     mut peer: String,
     event: &Event,
     keyboard_mode: KeyboardMode,
-    _lock_modes: Option<i32>,
+    lock_modes: Option<i32>,
 ) -> Vec<KeyEvent> {
     peer.retain(|c| !c.is_whitespace());
 
     update_modifiers_state(event);
 
-    match event.event_type {
-        EventType::KeyPress(key) => {
-            TO_RELEASE.lock().unwrap().insert(key, event.clone());
-        }
-        EventType::KeyRelease(key) => {
-            TO_RELEASE.lock().unwrap().remove(&key);
-        }
-        _ => {}
-    }
+    // Only legacy Windows-peer keypad navigation needs a paired NumLock
+    // decision. Other keys and modes keep their current-event lock state.
+    let preserve_num_lock = keyboard_mode == KeyboardMode::Legacy
+        && peer.eq_ignore_ascii_case("windows") && is_numpad_key(event);
+    let lock_modes = track_pending_release(
+        &mut TO_RELEASE.lock().unwrap(), event, lock_modes, preserve_num_lock,
+    );
 
     let mut key_event = KeyEvent::new();
     key_event.mode = keyboard_mode.into();
@@ -885,7 +1023,7 @@ pub fn event_to_key_events(
         _ => {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
-                legacy_keyboard_mode(event, key_event)
+                legacy_keyboard_mode(event, key_event, state::num_lock(lock_modes))
             }
             #[cfg(any(target_os = "android", target_os = "ios"))]
             {
@@ -898,7 +1036,7 @@ pub fn event_to_key_events(
     if keyboard_mode != KeyboardMode::Translate || is_numpad_key {
         let is_letter_key = is_letter_key_4_lock_modes(&event);
         for key_event in &mut key_events {
-            if let Some(lock_modes) = _lock_modes {
+            if let Some(lock_modes) = lock_modes {
                 parse_add_lock_modes_modifiers(key_event, lock_modes, is_numpad_key, is_letter_key);
             } else {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -925,7 +1063,11 @@ pub fn get_peer_platform() -> String {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn legacy_keyboard_mode(event: &Event, mut key_event: KeyEvent) -> Vec<KeyEvent> {
+pub fn legacy_keyboard_mode(
+    event: &Event,
+    mut key_event: KeyEvent,
+    num_lock: Option<bool>,
+) -> Vec<KeyEvent> {
     let mut events = Vec::new();
     // legacy mode(0): Generate characters locally, look for keycode on other side.
     let (mut key, down_or_up) = match event.event_type {
@@ -939,13 +1081,13 @@ pub fn legacy_keyboard_mode(event: &Event, mut key_event: KeyEvent) -> Vec<KeyEv
     let peer = get_peer_platform();
     let is_win = peer == "Windows";
     if is_win {
-        key = convert_numpad_keys(key);
+        key = convert_numpad_keys(key, num_lock);
     }
 
-    let alt = get_key_state(enigo::Key::Alt);
+    let alt = get_key_state(ModifierKey::Alt);
     #[cfg(windows)]
     let ctrl = {
-        let mut tmp = get_key_state(enigo::Key::Control) || get_key_state(enigo::Key::RightControl);
+        let mut tmp = get_key_state(ModifierKey::Control) || get_key_state(ModifierKey::RightControl);
         unsafe {
             if IS_ALT_GR {
                 if alt || key == Key::AltGr {
@@ -960,12 +1102,12 @@ pub fn legacy_keyboard_mode(event: &Event, mut key_event: KeyEvent) -> Vec<KeyEv
         tmp
     };
     #[cfg(not(windows))]
-    let ctrl = get_key_state(enigo::Key::Control) || get_key_state(enigo::Key::RightControl);
-    let shift = get_key_state(enigo::Key::Shift) || get_key_state(enigo::Key::RightShift);
+    let ctrl = get_key_state(ModifierKey::Control) || get_key_state(ModifierKey::RightControl);
+    let shift = get_key_state(ModifierKey::Shift) || get_key_state(ModifierKey::RightShift);
     #[cfg(windows)]
     let command = crate::platform::windows::get_win_key_state();
     #[cfg(not(windows))]
-    let command = get_key_state(enigo::Key::Meta);
+    let command = get_key_state(ModifierKey::Meta);
     let control_key = match key {
         Key::Alt => Some(ControlKey::Alt),
         Key::AltGr => Some(ControlKey::RAlt),

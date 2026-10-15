@@ -34,7 +34,6 @@ use std::{
     },
     time::SystemTime,
 };
-use uuid::Uuid;
 
 use crate::client::io_loop::Remote;
 use crate::client::{
@@ -510,7 +509,7 @@ impl<T: InvokeUiSession> Session<T> {
         }
         crate::get_audit_server(
             Config::get_option("api-server"),
-            Config::get_option("custom-rendezvous-server"),
+            String::new(),
             typ,
         )
     }
@@ -1129,7 +1128,7 @@ impl<T: InvokeUiSession> Session<T> {
         }
     }
 
-    pub fn reconnect(&self, force_relay: bool) {
+    pub fn reconnect(&self) {
         // 1. If current session is connecting, do not reconnect.
         // 2. If the connection is established, send `Data::Close`.
         // 3. If the connection is disconnected, do nothing.
@@ -1146,16 +1145,6 @@ impl<T: InvokeUiSession> Session<T> {
 
         let cloned = self.clone();
 
-        // override only if true
-        if true == force_relay {
-            let mut lc = self.lc.write().unwrap();
-            lc.force_relay = true;
-            // An explicit retry-via-relay is a decision about this peer, not transport
-            // necessity: Relay-only ICE for this round like any force-always-relay session,
-            // and it is the one kind of relay that belongs in the peer's saved config.
-            lc.policy_relay = true;
-            lc.peer_relay = true;
-        }
         self.lc.write().unwrap().peer_info = None;
         self.reconnect_count.fetch_add(1, Ordering::SeqCst);
         let mut lock = self.thread.lock().unwrap();
@@ -1203,13 +1192,12 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Close);
     }
 
-    pub fn continue_insecure_connection(&self, continue_insecure: bool) {
-        let data = if continue_insecure {
-            Data::ContinueInsecureConnection
-        } else {
-            Data::RejectInsecureConnection
-        };
-        self.send(data);
+    pub fn continue_insecure_connection(&self, response: &str) {
+        if let Some((decision, challenge)) = response.split_once(':') {
+            if matches!(decision, "Y" | "N") && !challenge.is_empty() {
+                self.send(Data::DirectIdentityDecision { challenge: challenge.to_owned(), accept: decision == "Y" });
+            }
+        }
     }
 
     pub fn elevate_direct(&self) {
@@ -1218,45 +1206,6 @@ impl<T: InvokeUiSession> Session<T> {
 
     pub fn elevate_with_logon(&self, username: String, password: String) {
         self.send(Data::ElevateWithLogon(username, password));
-    }
-
-    #[cfg(any(target_os = "android", target_os = "ios", not(feature = "flutter")))]
-    pub fn switch_sides(&self) {}
-
-    #[cfg(feature = "flutter")]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    #[tokio::main(flavor = "current_thread")]
-    pub async fn switch_sides(&self) {
-        match crate::ipc::connect(1000, "").await {
-            Ok(mut conn) => {
-                if conn
-                    .send(&crate::ipc::Data::SwitchSidesRequest(self.get_id()))
-                    .await
-                    .is_ok()
-                {
-                    if let Ok(Some(data)) = conn.next_timeout(1000).await {
-                        match data {
-                            crate::ipc::Data::SwitchSidesRequest(str_uuid) => {
-                                if let Ok(uuid) = Uuid::from_str(&str_uuid) {
-                                    let mut misc = Misc::new();
-                                    misc.set_switch_sides_request(SwitchSidesRequest {
-                                        uuid: Bytes::from(uuid.as_bytes().to_vec()),
-                                        ..Default::default()
-                                    });
-                                    let mut msg_out = Message::new();
-                                    msg_out.set_misc(misc);
-                                    self.send(Data::Message(msg_out));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                log::info!("server not started (will try to start): {}", err);
-            }
-        }
     }
 
     fn set_custom_resolution(&self, display: &SwitchDisplay) {
@@ -1398,7 +1347,6 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     fn clipboard(&self, content: String);
     fn cancel_msgbox(&self, tag: &str);
-    fn switch_back(&self, id: &str);
     fn portable_service_running(&self, running: bool);
     fn get_rgba(&self, display: usize) -> *const u8;
     fn next_rgba(&self, display: usize);
@@ -1440,8 +1388,8 @@ impl<T: InvokeUiSession> Interface for Session<T> {
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str) {
         let direct = self.lc.read().unwrap().direct;
         let received = self.lc.read().unwrap().received;
-        let retry_for_relay = direct == Some(true) && !received;
-        let retry = check_if_retry(msgtype, title, text, retry_for_relay);
+        let retry_direct_reset = direct == Some(true) && !received;
+        let retry = check_if_retry(msgtype, title, text, retry_direct_reset);
         self.ui_handler.msgbox(msgtype, title, text, link, retry);
     }
 
@@ -1598,10 +1546,8 @@ impl<T: InvokeUiSession> Session<T> {
 pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
     let (sender, receiver) = mpsc::unbounded_channel::<Data>();
     *handler.sender.write().unwrap() = Some(sender.clone());
-    let token = LocalConfig::get_option("access_token");
-    let key = crate::get_key(false).await;
     let mut remote = Remote::new(handler, receiver, sender);
-    remote.io_loop(&key, &token, round).await;
+    remote.io_loop(round).await;
 }
 
 #[tokio::main(flavor = "current_thread")]

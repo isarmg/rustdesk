@@ -1,7 +1,6 @@
 <p align="center">
   <img src="../res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#빌드를_위한_원시_단계">빌드</a> •
-  <a href="#Docker로_빌드하는_방법">Docker</a> •
   <a href="#파일_구조">구조</a> •
   <a href="#스크린샷">스냅샷</a><br>
   [<a href="../README.md">English</a>] | [<a href="README-UA.md">Українська</a>] | [<a href="README-CS.md">česky</a>] | [<a href="README-ZH.md">中文</a>] | [<a href="README-HU.md">Magyar</a>] | [<a href="README-ES.md">Español</a>] | [<a href="README-FA.md">فارسی</a>] | [<a href="README-FR.md">Français</a>] | [<a href="README-DE.md">Deutsch</a>] | [<a href="README-PL.md">Polski</a>] | [<a href="README-ID.md">Indonesian</a>] | [<a href="README-FI.md">Suomi</a>] | [<a href="README-ML.md">മലയാളം</a>] | [<a href="README-JP.md">日本語</a>] | [<a href="README-NL.md">Nederlands</a>] | [<a href="README-IT.md">Italiano</a>] | [<a href="README-RU.md">Русский</a>] | [<a href="README-PTBR.md">Português (Brasil)</a>] | [<a href="README-EO.md">Esperanto</a>] | [<a href="README-KR.md">한국어</a>] | [<a href="README-AR.md">العربي</a>] | [<a href="README-VN.md">Tiếng Việt</a>] | [<a href="README-DA.md">Dansk</a>] | [<a href="README-GR.md">Ελληνικά</a>] | [<a href="README-TR.md">Türkçe</a>] | [<a href="README-NO.md">Norsk</a>] | [<a href="README-RO.md">Română</a>]<br>
@@ -125,36 +124,9 @@ mv libsciter-gtk.so target/debug
 VCPKG_ROOT=$HOME/vcpkg cargo run
 ```
 
-## Docker로_빌드하는_방법
+## Native deployment
 
-먼저 리포지토리를 복제하고 Docker 컨테이너를 빌드합니다:
-
-```sh
-git clone https://github.com/rustdesk/rustdesk
-cd rustdesk
-git submodule update --init --recursive
-docker build -t "rustdesk-builder" .
-```
-
-그런 다음 응용 프로그램을 빌드해야 할 때마다 다음 명령을 실행합니다:
-
-```sh
-docker run --rm -it -v $PWD:/home/user/rustdesk -v rustdesk-git-cache:/home/user/.cargo/git -v rustdesk-registry-cache:/home/user/.cargo/registry -e PUID="$(id -u)" -e PGID="$(id -g)" rustdesk-builder
-```
-
-첫 번째 빌드는 종속성이 캐시되기까지 시간이 오래 걸릴 수 있으며, 이후 빌드는 더 빨라집니다. 또한 빌드 명령에 다른 인수를 지정해야 하는 경우 명령 끝의 `<OPTIONAL-ARGS>` 위치에 인수를 지정할 수 있습니다. 예를 들어 최적화된 릴리스 버전을 빌드하려면 위의 명령 뒤에 `--release`를 추가하면 됩니다. 결과 실행 파일은 시스템의 대상 폴더에서 사용할 수 있으며 실행할 수 있습니다::
-
-```sh
-target/debug/rustdesk
-```
-
-또는 릴리스 실행 파일을 실행하는 경우:
-
-```sh
-target/release/rustdesk
-```
-
-RustDesk 리포지토리의 루트에서 이러한 명령을 실행하고 있는지 확인하세요. 그렇지 않으면 응용 프로그램이 필요한 리소스를 찾지 못할 수 있습니다. 또한 `install` 또는 `run` 과 같은 다른 cargo 하위 명령은 호스트가 아닌 컨테이너 내부에 프로그램을 설치하거나 실행하므로 현재 이 방법을 통해 지원되지 않는다는 점에 유의하세요.
+For this fork, follow the [native build and deployment instructions](../README.md#编译部署) and [pinned toolchain](BUILD-TOOLCHAIN.md). Applications run natively on physical devices.
 
 ## 파일_구조
 

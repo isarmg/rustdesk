@@ -36,13 +36,11 @@ import 'input_model.dart';
 import 'platform_model.dart';
 import 'package:flutter_hbb/utils/scale.dart';
 
-import 'package:flutter_hbb/generated_bridge.dart'
-    if (dart.library.html) 'package:flutter_hbb/web/bridge.dart';
-import 'package:flutter_hbb/native/custom_cursor.dart'
-    if (dart.library.html) 'package:flutter_hbb/web/custom_cursor.dart';
+import 'package:flutter_hbb/generated_bridge.dart';
+import 'package:flutter_hbb/native/custom_cursor.dart';
 
 typedef HandleMsgBox = Function(Map<String, dynamic> evt, String id);
-typedef ReconnectHandle = Function(OverlayDialogManager, SessionID, bool);
+typedef ReconnectHandle = Function(OverlayDialogManager, SessionID);
 final _constSessionId = Uuid().v4obj();
 // Empirical restart reconnect cadence: keep the last frame briefly and retry quickly.
 const _restartReconnectSilentDelaySecs = 5;
@@ -277,7 +275,7 @@ class FfiModel with ChangeNotifier {
       return null;
     } else {
       final icon =
-          '${secure == true ? 'secure' : 'insecure'}${direct == true ? '' : '_relay'}';
+          secure == true ? 'secure' : 'insecure';
       final iconWidget =
           SvgPicture.asset('assets/$icon.svg', width: 48, height: 48);
       String connectionText =
@@ -350,9 +348,9 @@ class FfiModel with ChangeNotifier {
         Clipboard.setData(ClipboardData(text: evt['content']));
       } else if (name == 'permission') {
         updatePermission(evt, peerId);
-      } else if (name == 'add_connection') {
+      } else if (isDesktop && name == 'add_connection') {
         parent.target?.serverModel.addConnection(evt);
-      } else if (name == 'on_client_remove') {
+      } else if (isDesktop && name == 'on_client_remove') {
         parent.target?.serverModel.onClientRemove(evt);
       } else if (name == 'update_quality_status') {
         parent.target?.qualityMonitorModel.updateQualityStatus(evt);
@@ -360,15 +358,11 @@ class FfiModel with ChangeNotifier {
         updateBlockInputState(evt, peerId);
       } else if (name == 'update_privacy_mode') {
         updatePrivacyMode(evt, sessionId, peerId);
-      } else if (name == 'show_elevation') {
+      } else if (isDesktop && name == 'show_elevation') {
         final show = evt['show'].toString() == 'true';
         parent.target?.serverModel.setShowElevation(show);
       } else if (name == 'cancel_msgbox') {
         cancelMsgBox(evt, sessionId);
-      } else if (name == 'switch_back') {
-        final peer_id = evt['peer_id'].toString();
-        await bind.sessionSwitchSides(sessionId: sessionId);
-        closeConnection(id: peer_id);
       } else if (name == 'portable_service_running') {
         _handlePortableServiceRunning(peerId, evt);
       } else if (name == 'on_url_scheme_received') {
@@ -632,6 +626,17 @@ class FfiModel with ChangeNotifier {
     final text = evt['text'];
     final link = evt['link'];
 
+    if (type == 'security-error') {
+      resetRestartReconnectState();
+      _timer?.cancel();
+      _timer = null;
+      _androidDocumentPickerInterruptedConnection = false;
+      parent.target?.inputModel.setRelativeMouseMode(false);
+      _cancelPendingMonitorRestore();
+      showMsgBox(sessionId, 'error', title, text, link, false, dialogManager);
+      return;
+    }
+
     // The peer-gone detector reconnects under `restarting-show` rather than an error title, so
     // it needs naming here too. By its own title, not the type: an explicitly restarted remote
     // device reaches the same type from a path this change does not touch.
@@ -666,7 +671,7 @@ class FfiModel with ChangeNotifier {
       if (_restartReconnectDelayTimer == null) {
         parent.target?.inputModel.setRelativeMouseMode(false);
         _cancelPendingMonitorRestore();
-        bind.sessionReconnect(sessionId: sessionId, forceRelay: false);
+        bind.sessionReconnect(sessionId: sessionId);
         clearPermissions();
         // Retry once more after the silent window so restart reconnect attempts
         // are spaced by the empirical short cadence instead of only updating UI.
@@ -676,13 +681,13 @@ class FfiModel with ChangeNotifier {
           if (parent.target?.closed == true) {
             return;
           }
-          reconnect(dialogManager, sessionId, false);
+          reconnect(dialogManager, sessionId);
         });
       }
     } else if (type == 'restarting-show') {
       _restartReconnectDelayTimer?.cancel();
       _restartReconnectDelayTimer = null;
-      reconnect(dialogManager, sessionId, false);
+      reconnect(dialogManager, sessionId);
     } else if (type == 'wait-remote-accept-nook') {
       showWaitAcceptDialog(sessionId, type, title, text, dialogManager);
     } else if (type == 'on-uac' || type == 'on-foreground-elevated') {
@@ -691,8 +696,6 @@ class FfiModel with ChangeNotifier {
       showWaitUacDialog(sessionId, dialogManager, type);
     } else if (type == 'elevation-error') {
       showElevationError(sessionId, type, title, text, dialogManager);
-    } else if (type == 'relay-hint' || type == 'relay-hint2') {
-      showRelayHintDialog(sessionId, type, title, text, dialogManager, peerId);
     } else if (text == kMsgboxTextWaitingForImage) {
       showConnectedWaitingForImage(dialogManager, sessionId, type, title, text);
     } else if (title == 'Privacy mode') {
@@ -727,7 +730,7 @@ class FfiModel with ChangeNotifier {
       return;
     }
     _androidDocumentPickerInterruptedConnection = false;
-    reconnect(parent.target!.dialogManager, sessionId, false);
+    reconnect(parent.target!.dialogManager, sessionId);
   }
 
   /// Auto-retry check for "Remote desktop is offline" error.
@@ -804,7 +807,7 @@ class FfiModel with ChangeNotifier {
     _timer?.cancel();
     if (hasRetry) {
       _timer = Timer(Duration(seconds: _reconnects), () {
-        reconnect(dialogManager, sessionId, false);
+        reconnect(dialogManager, sessionId);
       });
       _reconnects *= 2;
     } else {
@@ -824,60 +827,15 @@ class FfiModel with ChangeNotifier {
     _pendingRestoreTimer = null;
   }
 
-  void reconnect(OverlayDialogManager dialogManager, SessionID sessionId,
-      bool forceRelay) {
+  void reconnect(OverlayDialogManager dialogManager, SessionID sessionId) {
     // Disable relative mouse mode before reconnecting to ensure cursor is released.
     parent.target?.inputModel.setRelativeMouseMode(false);
     _cancelPendingMonitorRestore();
-    bind.sessionReconnect(sessionId: sessionId, forceRelay: forceRelay);
+    bind.sessionReconnect(sessionId: sessionId);
     clearPermissions();
     dialogManager.dismissAll();
     dialogManager.showLoading(translate('Connecting...'),
         onCancel: closeConnection);
-  }
-
-  Future<void> showRelayHintDialog(
-      SessionID sessionId,
-      String type,
-      String title,
-      String text,
-      OverlayDialogManager dialogManager,
-      String peerId) async {
-    var hint = "\n\n${translate('relay_hint_tip')}";
-    if (text.contains("10054") || text.contains("104")) {
-      hint = "";
-    }
-    final text2 = "${translate(text)}$hint";
-
-    dialogManager.show(tag: '$sessionId-$type', (setState, close, context) {
-      onClose() {
-        closeConnection();
-        close();
-      }
-
-      final style =
-          ElevatedButton.styleFrom(backgroundColor: Colors.green[700]);
-
-      return CustomAlertDialog(
-        title: null,
-        content: msgboxContent(type, title, text2),
-        actions: [
-          dialogButton('Close', onPressed: onClose, isOutline: true),
-          if (type == 'relay-hint')
-            dialogButton('Connect via relay',
-                onPressed: () => reconnect(dialogManager, sessionId, true),
-                buttonStyle: style,
-                isOutline: true),
-          dialogButton('Retry',
-              onPressed: () => reconnect(dialogManager, sessionId, false)),
-          if (type == 'relay-hint2')
-            dialogButton('Connect via relay',
-                onPressed: () => reconnect(dialogManager, sessionId, true),
-                buttonStyle: style),
-        ],
-        onCancel: onClose,
-      );
-    });
   }
 
   void showConnectedWaitingForImage(OverlayDialogManager dialogManager,
@@ -3510,18 +3468,6 @@ class QualityMonitorModel with ChangeNotifier {
   bool get show => _show;
   QualityMonitorData get data => _data;
 
-  // Only a WebRTC session on the web names its transport here: web has no
-  // session tab to show it on (the desktop tab's tooltip already does), and
-  // WebRTC is the one path that can be direct or TURN.
-  String? get webrtcTransport {
-    if (!isWeb) return null;
-    final ffiModel = parent.target?.ffiModel;
-    if (ffiModel == null) return null;
-    final streamType = ffiModel.cachedPeerData.streamType;
-    if (!streamType.startsWith('WebRTC')) return null;
-    return ffiModel.direct == false ? '$streamType (TURN)' : streamType;
-  }
-
   checkShowQualityMonitor(SessionID sessionId) async {
     final show = await bind.sessionGetToggleOption(
             sessionId: sessionId, arg: 'show-quality-monitor') ==
@@ -3611,7 +3557,7 @@ class FFI {
   late final FfiModel ffiModel; // session
   late final CursorModel cursorModel; // session
   late final CanvasModel canvasModel; // session
-  late final ServerModel serverModel; // global
+  late final ServerModel serverModel; // desktop only
   late final PeerTabModel peerTabModel; // global
   late final QualityMonitorModel qualityMonitorModel; // session
   late final InputModel inputModel; // session
@@ -3628,7 +3574,9 @@ class FFI {
     ffiModel = FfiModel(WeakReference(this));
     cursorModel = CursorModel(WeakReference(this));
     canvasModel = CanvasModel(WeakReference(this));
-    serverModel = ServerModel(WeakReference(this));
+    if (isDesktop) {
+      serverModel = ServerModel(WeakReference(this));
+    }
     peerTabModel = PeerTabModel(WeakReference(this));
     qualityMonitorModel = QualityMonitorModel(WeakReference(this));
     inputModel = InputModel(WeakReference(this));
@@ -3660,11 +3608,9 @@ class FFI {
   /// Start a remote desktop session with the given [id].
   void start(
     String id, {
-    String? switchUuid,
     String? password,
     bool? isSharedPassword,
     String? connToken,
-    bool? forceRelay,
     int? tabWindowId,
     int? display,
     List<int>? displays,
@@ -3684,8 +3630,6 @@ class FFI {
       final addRes = bind.sessionAddSync(
         sessionId: sessionId,
         id: id,
-        switchUuid: switchUuid ?? '',
-        forceRelay: forceRelay ?? false,
         password: password ?? '',
         isSharedPassword: isSharedPassword ?? false,
         connToken: connToken,
@@ -3916,10 +3860,6 @@ class FFI {
     }
     debugPrint('model $id closed');
     id = '';
-  }
-
-  void setMethodCallHandler(FMethod callback) {
-    platformFFI.setMethodCallHandler(callback);
   }
 
   Future<bool> invokeMethod(String method, [dynamic arguments]) async {

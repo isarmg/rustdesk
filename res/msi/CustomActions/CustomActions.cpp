@@ -9,6 +9,14 @@
 #include <shlwapi.h>
 
 #include "./Common.h"
+#include "../../../src/platform/windows_supported.h"
+
+UINT __stdcall CheckSupportedWindows(MSIHANDLE hInstall)
+{
+    return MsiSetPropertyW(hInstall, L"RUSTDESK_SUPPORTED_WINDOWS",
+                           rustdesk_supported_windows() ? L"1" : L"");
+}
+
 
 #pragma comment(lib, "Shlwapi.lib")
 

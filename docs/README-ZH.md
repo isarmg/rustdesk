@@ -2,7 +2,6 @@
   <img src="../res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#免费的公共服务器">服务器</a> •
   <a href="#基本构建步骤">编译</a> •
-  <a href="#使用-Docker-编译">Docker</a> •
   <a href="#文件结构">结构</a> •
   <a href="#截图">截图</a><br>
   [<a href="../README.md">English</a>] | [<a href="README-UA.md">Українська</a>] | [<a href="README-CS.md">česky</a>] | [<a href="README-HU.md">Magyar</a>] | [<a href="README-ES.md">Español</a>] | [<a href="README-FA.md">فارسی</a>] | [<a href="README-FR.md">Français</a>] | [<a href="README-DE.md">Deutsch</a>] | [<a href="README-PL.md">Polski</a>] | [<a href="README-ID.md">Indonesian</a>] | [<a href="README-FI.md">Suomi</a>] | [<a href="README-ML.md">മലയാളം</a>] | [<a href="README-JP.md">日本語</a>] | [<a href="README-NL.md">Nederlands</a>] | [<a href="README-IT.md">Italiano</a>] | [<a href="README-RU.md">Русский</a>] | [<a href="README-PTBR.md">Português (Brasil)</a>] | [<a href="README-EO.md">Esperanto</a>] | [<a href="README-KR.md">한국어</a>] | [<a href="README-AR.md">العربي</a>] | [<a href="README-VN.md">Tiếng Việt</a>] | [<a href="README-GR.md">Ελληνικά</a>]<br>
@@ -123,90 +122,9 @@ mv libsciter-gtk.so target/debug
 VCPKG_ROOT=$HOME/vcpkg cargo run
 ```
 
-## 使用 Docker 编译
+## Native deployment
 
-克隆版本库并构建 Docker 容器:
-
-```sh
-git clone https://github.com/rustdesk/rustdesk # 克隆Github存储库
-cd rustdesk # 进入文件夹
-docker build -t "rustdesk-builder" . # 构建容器
-```
-
-请注意：
-* 针对国内网络访问问题，可以做以下几点优化：  
-   1. Dockerfile 中修改系统的源到国内镜像
-      ```
-      在Dockerfile的RUN apt update之前插入两行：
-   
-      RUN sed -i "s|deb.debian.org|mirrors.aliyun.com|g" /etc/apt/sources.list && \
-          sed -i "s|security.debian.org|mirrors.aliyun.com|g" /etc/apt/sources.list
-      ```
-
-   2. 修改容器系统中的 cargo 源，在`RUN ./rustup.sh -y`后插入下面代码：
-
-      ```
-      RUN echo '[source.crates-io]' > ~/.cargo/config \
-       && echo 'registry = "https://github.com/rust-lang/crates.io-index"'  >> ~/.cargo/config \
-       && echo '# 替换成你偏好的镜像源'  >> ~/.cargo/config \
-       && echo "replace-with = 'sjtu'"  >> ~/.cargo/config \
-       && echo '# 上海交通大学'   >> ~/.cargo/config \
-       && echo '[source.sjtu]'   >> ~/.cargo/config \
-       && echo 'registry = "https://mirrors.sjtug.sjtu.edu.cn/git/crates.io-index"'  >> ~/.cargo/config \
-       && echo '' >> ~/.cargo/config
-      ```
-
-   3. Dockerfile 中加入代理的 env
-
-      ```
-      在User root后插入两行
-
-      ENV http_proxy=http://host:port
-      ENV https_proxy=http://host:port
-      ```
-
-   4. docker build 命令后面加上 proxy 参数
-
-      ```
-      docker build -t "rustdesk-builder" . --build-arg http_proxy=http://host:port --build-arg https_proxy=http://host:port
-      ```
-
-### 构建 RustDesk 程序
-
-然后, 每次需要构建应用程序时, 运行以下命令:
-
-```sh
-docker run --rm -it -v $PWD:/home/user/rustdesk -v rustdesk-git-cache:/home/user/.cargo/git -v rustdesk-registry-cache:/home/user/.cargo/registry -e PUID="$(id -u)" -e PGID="$(id -g)" rustdesk-builder
-```
-
-请注意:  
-* 因为需要缓存依赖项，首次构建一般很慢（国内网络会经常出现拉取失败，可以多试几次）。  
-* 如果您需要添加不同的构建参数，可以在指令末尾的`<OPTIONAL-ARGS>` 位置进行修改。例如构建一个"Release"版本，在指令后面加上` --release`即可。
-* 如果出现以下的提示，则是无权限问题，可以尝试把`-e PUID="$(id -u)" -e PGID="$(id -g)"`参数去掉。
-   ```
-   usermod: user user is currently used by process 1
-   groupmod: Permission denied.
-   groupmod: cannot lock /etc/group; try again later.
-   ```
-   > **原因：** 容器的 entrypoint 脚本会检测 UID 和 GID，在度判和给定的环境变量的不一致时，会强行修改 user 的 UID 和 GID 并重新运行。但在重启后读不到环境中的 UID 和 GID，然后再次进入判错重启环节
-
-
-### 运行 RustDesk 程序
-
-生成的可执行程序在 target 目录下，可直接通过指令运行调试 (Debug) 版本的 RustDesk:
-```sh
-target/debug/rustdesk
-```
-
-或者您想运行发行 (Release) 版本:
-
-```sh
-target/release/rustdesk
-```
-
-请注意：
-* 请保证您运行的目录是在 RustDesk 库的根目录内，否则软件会读不到文件。
-* `install`、`run`等 Cargo 的子指令在容器内不可用，宿主机才行。
+For this fork, follow the [native build and deployment instructions](../README.md#编译部署) and [pinned toolchain](BUILD-TOOLCHAIN.md). Applications run natively on physical devices.
 
 ## 文件结构
 

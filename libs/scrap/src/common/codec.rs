@@ -113,9 +113,9 @@ pub struct Decoder {
     #[cfg(feature = "vram")]
     h265_vram: Option<VRamDecoder>,
     #[cfg(feature = "mediacodec")]
-    h264_media_codec: MediaCodecDecoder,
+    h264_media_codec: Option<MediaCodecDecoder>,
     #[cfg(feature = "mediacodec")]
-    h265_media_codec: MediaCodecDecoder,
+    h265_media_codec: Option<MediaCodecDecoder>,
     format: CodecFormat,
     valid: bool,
     #[cfg(feature = "hwcodec")]
@@ -147,9 +147,9 @@ impl Encoder {
                     codec: Box::new(hw),
                 }),
                 Err(e) => {
-                    log::error!("new hw encoder failed: {e:?}, clear config");
-                    HwCodecConfig::clear(false, true);
-                    *ENCODE_CODEC_FORMAT.lock().unwrap() = CodecFormat::VP9;
+                    // Initialization can fail temporarily (for example, busy hardware).
+                    // Keep negotiated capabilities intact so a new session can retry.
+                    log::error!("new hw encoder failed: {e:?}");
                     Err(e)
                 }
             },
@@ -159,9 +159,7 @@ impl Encoder {
                     codec: Box::new(tex),
                 }),
                 Err(e) => {
-                    log::error!("new vram encoder failed: {e:?}, clear config");
-                    HwCodecConfig::clear(true, true);
-                    *ENCODE_CODEC_FORMAT.lock().unwrap() = CodecFormat::VP9;
+                    log::error!("new vram encoder failed: {e:?}");
                     Err(e)
                 }
             },
@@ -280,14 +278,6 @@ impl Encoder {
         }
         if h265_useable {
             auto_codec = CodecFormat::H265;
-        }
-        if auto_codec == CodecFormat::VP9 || auto_codec == CodecFormat::AV1 {
-            let mut system = System::new();
-            system.refresh_memory();
-            if vp8_useable && system.total_memory() <= 4 * 1024 * 1024 * 1024 {
-                // 4 Gb
-                auto_codec = CodecFormat::VP8
-            }
         }
 
         *format = match preference {
@@ -619,6 +609,21 @@ impl Decoder {
         }
     }
 
+    #[cfg(feature = "mediacodec")]
+    pub fn set_video_size(&mut self, width: i32, height: i32) -> ResultType<()> {
+        if let Some(decoder) = self
+            .h264_media_codec
+            .as_mut()
+            .or(self.h265_media_codec.as_mut())
+        {
+            if let Err(error) = decoder.set_video_size(width, height) {
+                self.valid = false;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
     pub fn format(&self) -> CodecFormat {
         self.format
     }
@@ -810,10 +815,10 @@ impl Decoder {
         rgb: &mut ImageRgb,
     ) -> ResultType<bool> {
         let mut ret = false;
-        for h264 in frames.frames.iter() {
-            return decoder.decode(&h264.data, rgb);
+        for frame in &frames.frames {
+            ret |= decoder.decode(&frame.data, rgb)?;
         }
-        return Ok(false);
+        Ok(ret)
     }
 
     fn preference(id: Option<&str>) -> (PreferCodec, Chroma) {
@@ -958,16 +963,7 @@ pub fn base_bitrate(width: u32, height: u32) -> u32 {
 
     let bitrate = (*preset_bitrate as f32 * (pixels as f32 / preset_pixels as f32)).round() as u32;
 
-    #[cfg(target_os = "android")]
-    {
-        let fix = crate::Display::fix_quality() as u32;
-        log::debug!("Android screen, fix quality:{}", fix);
-        bitrate * fix
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        bitrate
-    }
+    bitrate
 }
 
 pub fn codec_thread_num(limit: usize) -> usize {

@@ -1,6 +1,9 @@
 use super::*;
 use hbb_common::{allow_err, anyhow};
-use base::platform::linux::DISTRO;
+use base::{
+    platform::linux::DISTRO,
+    session_protocol::{SCRAP_UBUNTU_HIGHER_REQUIRED, SCRAP_XDP_PORTAL_UNAVAILABLE},
+};
 use scrap::{
     is_cursor_embedded, set_map_err,
     wayland::pipewire::{fill_displays, try_fix_logical_size},
@@ -8,8 +11,6 @@ use scrap::{
 };
 use std::collections::HashMap;
 use std::io;
-
-use crate::client::{SCRAP_UBUNTU_HIGHER_REQUIRED, SCRAP_XDP_PORTAL_UNAVAILABLE};
 
 lazy_static::lazy_static! {
     static ref CAP_DISPLAY_INFO: RwLock<HashMap<usize, u64>> = RwLock::new(HashMap::new());

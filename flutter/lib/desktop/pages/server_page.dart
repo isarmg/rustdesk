@@ -702,15 +702,6 @@ class _CmControlPanel extends StatelessWidget {
 
 
         Offstage(
-          offstage: !client.fromSwitch,
-          child: buildButton(context,
-              color: Colors.purple,
-              onClick: () => handleSwitchBack(context),
-              icon: Icon(Icons.reply, color: Colors.white),
-              text: "Switch Sides",
-              textColor: Colors.white),
-        ),
-        Offstage(
           offstage: !showElevation,
           child: buildButton(
             context,
@@ -910,9 +901,6 @@ class _CmControlPanel extends StatelessWidget {
     }
   }
 
-  void handleSwitchBack(BuildContext context) {
-    bind.cmSwitchBack(connId: client.id);
-  }
 
 
 }

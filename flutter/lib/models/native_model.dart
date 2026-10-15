@@ -195,7 +195,6 @@ class PlatformFFI {
         AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
         name = '${androidInfo.brand}-${androidInfo.model}';
         id = androidInfo.id.hashCode.toString();
-        androidVersion = androidInfo.version.sdkInt;
       } else if (isIOS) {
         IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
         name = iosInfo.utsname.machine;
@@ -302,13 +301,6 @@ class PlatformFFI {
 
   void stopDesktopWebListener() {}
 
-  void setMethodCallHandler(FMethod callback) {
-    _toAndroidChannel.setMethodCallHandler((call) async {
-      callback(call.method, call.arguments);
-      return null;
-    });
-  }
-
   invokeMethod(String method, [dynamic arguments]) async {
     if (!isAndroid) return Future<bool>(() => false);
     return await _toAndroidChannel.invokeMethod(method, arguments);
@@ -318,10 +310,6 @@ class PlatformFFI {
       [dynamic arguments]) async {
     if (!isAndroid) return null;
     return await _toAndroidChannel.invokeMethod<T>(method, arguments);
-  }
-
-  void syncAndroidServiceAppDirConfigPath() {
-    invokeMethod(AndroidChannel.kSyncAppDirConfigPath, _dir);
   }
 
   void setFullscreenCallback(void Function(bool) fun) {}

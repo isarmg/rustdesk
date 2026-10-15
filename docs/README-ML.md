@@ -2,7 +2,6 @@
   <img src="../res/logo-header.svg" alt="RustDesk - Your remote desktop"><br>
   <a href="#free-public-servers">Servers</a> •
   <a href="#raw-steps-to-build">Build</a> •
-  <a href="#how-to-build-with-docker">Docker</a> •
   <a href="#file-structure">Structure</a> •
   <a href="#snapshot">Snapshot</a><br>
   [<a href="../README.md">English</a>] | [<a href="README-UA.md">Українська</a>] | [<a href="README-CS.md">česky</a>] | [<a href="README-ZH.md">中文</a>] | [<a href="README-HU.md">Magyar</a>] | [<a href="README-ES.md">Español</a>] | [<a href="README-FA.md">فارسی</a>] | [<a href="README-FR.md">Français</a>] | [<a href="README-DE.md">Deutsch</a>] | [<a href="README-PL.md">Polski</a>] | [<a href="README-ID.md">Indonesian</a>] | [<a href="README-FI.md">Suomi</a>] | [<a href="README-JP.md">日本語</a>] | [<a href="README-NL.md">Nederlands</a>] | [<a href="README-IT.md">Italiano</a>] | [<a href="README-RU.md">Русский</a>] | [<a href="README-PTBR.md">Português (Brasil)</a>] | [<a href="README-EO.md">Esperanto</a>] | [<a href="README-KR.md">한국어</a>] | [<a href="README-AR.md">العربي</a>] | [<a href="README-VN.md">Tiếng Việt</a>] | [<a href="README-GR.md">Ελληνικά</a>]<br>
@@ -96,35 +95,9 @@ mv libsciter-gtk.so target/debug
 VCPKG_ROOT=$HOME/vcpkg cargo run
 ```
 
-## ഡോക്കർ ഉപയോഗിച്ച് എങ്ങനെ നിർമ്മിക്കാം
+## Native deployment
 
- റെപ്പോസിറ്റോറി ക്ലോണുചെയ്‌ത് ഡോക്കർ കണ്ടെയ്‌നർ നിർമ്മിക്കുന്നതിലൂടെ ആരംഭിക്കുക:
-
-```sh
-git clone https://github.com/rustdesk/rustdesk
-cd rustdesk
-docker build -t "rustdesk-builder" .
-```
-
-തുടർന്ന്, ഓരോ തവണയും നിങ്ങൾ ആപ്ലിക്കേഷൻ നിർമ്മിക്കേണ്ടതുണ്ട്, ഇനിപ്പറയുന്ന കമാൻഡ് പ്രവർത്തിപ്പിക്കുക:
-
-```sh
-docker run --rm -it -v $PWD:/home/user/rustdesk -v rustdesk-git-cache:/home/user/.cargo/git -v rustdesk-registry-cache:/home/user/.cargo/registry -e PUID="$(id -u)" -e PGID="$(id -g)" rustdesk-builder
-```
-
-ഡിപൻഡൻസികൾ കാഷെ ചെയ്യുന്നതിനുമുമ്പ് ആദ്യ ബിൽഡ് കൂടുതൽ സമയമെടുത്തേക്കാം, തുടർന്നുള്ള ബിൽഡുകൾ വേഗത്തിലാകും. കൂടാതെ, നിങ്ങൾക്ക് ബിൽഡ് കമാൻഡിലേക്ക് വ്യത്യസ്ത ആർഗ്യുമെന്റുകൾ വ്യക്തമാക്കണമെങ്കിൽ, കമാൻഡിന്റെ അവസാനം `<OPTIONAL-ARGS>` സ്ഥാനത്ത് നിങ്ങൾക്ക് അങ്ങനെ ചെയ്യാം. ഉദാഹരണത്തിന്, നിങ്ങൾ ഒരു ഒപ്റ്റിമൈസ് ചെയ്ത റിലീസ് പതിപ്പ് നിർമ്മിക്കാൻ ആഗ്രഹിക്കുന്നുവെങ്കിൽ, മുകളിലുള്ള കമാൻഡ് തുടർന്ന് `--release` നിങ്ങൾ പ്രവർത്തിപ്പിക്കും. തത്ഫലമായുണ്ടാകുന്ന എക്സിക്യൂട്ടബിൾ നിങ്ങളുടെ സിസ്റ്റത്തിലെ ടാർഗെറ്റ് ഫോൾഡറിൽ ലഭ്യമാകും, കൂടാതെ ഇത് ഉപയോഗിച്ച് പ്രവർത്തിപ്പിക്കാം:
-
-```sh
-target/debug/rustdesk
-```
-
-അല്ലെങ്കിൽ, നിങ്ങൾ ഒരു റിലീസ് എക്സിക്യൂട്ടബിൾ പ്രവർത്തിപ്പിക്കുകയാണെങ്കിൽ:
-
-```sh
-target/release/rustdesk
-```
-
-RustDesk റിപ്പോസിറ്ററിയുടെ റൂട്ടിൽ നിന്നാണ് നിങ്ങൾ ഈ കമാൻഡുകൾ പ്രവർത്തിപ്പിക്കുന്നതെന്ന് ദയവായി ഉറപ്പാക്കുക, അല്ലാത്തപക്ഷം ആപ്ലിക്കേഷന് ആവശ്യമായ ഉറവിടങ്ങൾ കണ്ടെത്താൻ കഴിഞ്ഞേക്കില്ല. ഹോസ്റ്റിന് പകരം കണ്ടെയ്‌നറിനുള്ളിൽ പ്രോഗ്രാം ഇൻസ്റ്റാൾ ചെയ്യുകയോ പ്രവർത്തിപ്പിക്കുകയോ ചെയ്യുന്നതിനാൽ, `install` അല്ലെങ്കിൽ `run` പോലുള്ള മറ്റ് കാർഗോ സബ്‌കമാൻഡുകൾ നിലവിൽ ഈ രീതിയെ പിന്തുണയ്ക്കുന്നില്ല എന്നതും ശ്രദ്ധിക്കുക.
+For this fork, follow the [native build and deployment instructions](../README.md#编译部署) and [pinned toolchain](BUILD-TOOLCHAIN.md). Applications run natively on physical devices.
 
 ## ഫയൽ ഘടന
 

@@ -31,23 +31,14 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
     // though the `lastUpdatedClipData` will be set to null once.
     private var lastUpdatedClipData: ClipData? = null
     private var isClientEnabled = true;
-    private var _isCaptureStarted = false;
-
-    val isCaptureStarted: Boolean
-        get() = _isCaptureStarted
-
-    fun checkPrimaryClip(isClient: Boolean) {
+    private fun checkPrimaryClip() {
         val clipData = clipboardManager.primaryClip
         if (clipData != null && clipData.itemCount > 0) {
             // Only handle the first item in the clipboard for now.
             val clip = clipData.getItemAt(0)
-            // Ignore the `isClipboardDataEqual()` check if it's a host operation.
-            // Because it's an action manually triggered by the user.
-            if (isClient) {
-                if (lastUpdatedClipData != null && isClipboardDataEqual(clipData, lastUpdatedClipData!!)) {
-                    Log.d(logTag, "Clipboard data is the same as last update, ignore")
-                    return
-                }
+            if (lastUpdatedClipData != null && isClipboardDataEqual(clipData, lastUpdatedClipData!!)) {
+                Log.d(logTag, "Clipboard data is the same as last update, ignore")
+                return
             }
             val text = if (clipData.description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)) {
                 clip.text
@@ -63,14 +54,13 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
             }
             if (count > 0) {
                 val clipsBytes = clips.build().toByteArray()
-                val isClientFlag = if (isClient) 1 else 0
                 val clipsBuf = ByteBuffer.allocateDirect(clipsBytes.size + 1).apply {
-                    put(isClientFlag.toByte())
+                    put(1.toByte())
                     put(clipsBytes)
                 }
                 clipsBuf.flip()
                 lastUpdatedClipData = clipData
-                Log.d(logTag, "${if (isClient) "client" else "host"}, send clipboard data to the remote")
+                Log.d(logTag, "client, send clipboard data to the remote")
                 FFI.onClipboardUpdate(clipsBuf)
             }
         }
@@ -100,10 +90,6 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
         return true
     }
 
-    fun setCaptureStarted(started: Boolean) {
-        _isCaptureStarted = started
-    }
-
     @Keep
     fun rustEnableClientClipboard(enable: Boolean) {
         Log.d(logTag, "rustEnableClientClipboard: enable: $enable")
@@ -111,12 +97,12 @@ class RdClipboardManager(private val clipboardManager: ClipboardManager) {
         lastUpdatedClipData = null
     }
 
-    fun syncClipboard(isClient: Boolean) {
-        Log.d(logTag, "syncClipboard: isClient: $isClient, isClientEnabled: $isClientEnabled")
-        if (isClient && !isClientEnabled) {
+    fun syncClipboard() {
+        Log.d(logTag, "syncClipboard: isClientEnabled: $isClientEnabled")
+        if (!isClientEnabled) {
             return
         }
-        checkPrimaryClip(isClient)
+        checkPrimaryClip()
     }
 
     @Keep

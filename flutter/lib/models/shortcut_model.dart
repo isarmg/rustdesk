@@ -186,9 +186,9 @@ class ShortcutModel {
   ///   * Fullscreen / Toolbar / Pin: rendered wherever the
   ///     desktop layout applies (native desktop + Web). Native mobile is
   ///     permanently full-screen and doesn't have a desktop-style toolbar.
-  ///   * Screenshot / Switch Sides: native desktop only. The Web bridge
-  ///     throws UnimplementedError for `sessionTakeScreenshot`; mobile
-  ///     toolbars don't surface either action.
+  ///   * Screenshot: native desktop only. The Web bridge throws
+  ///     UnimplementedError for `sessionTakeScreenshot`; mobile toolbars
+  ///     don't surface this action.
   ///   * Tab navigation / Close Tab: only native desktop ships
   ///     `DesktopTabController`; Web's `RemotePage` is invoked without one.
   ///   * Reset Canvas: only the mobile toolbar builds the menu entry
@@ -203,7 +203,6 @@ class ShortcutModel {
       includeTabShortcuts: isDesktop,
       includeToolbarShortcut: desktopLayout,
       includeCloseTabShortcut: isDesktop,
-      includeSwitchSidesShortcut: isDesktop,
       includeResetCanvasShortcut: isMobile,
       includePinToolbarShortcut: desktopLayout,
       includeViewModeShortcut: true,
@@ -244,6 +243,7 @@ class ShortcutConfig {
     // Old saved bindings must no longer consume input for removed features.
     hidden.addAll(const {
       'toggle_chat',
+      'switch_sides',
       'toggle_voice_call',
       'toggle_recording',
       'toggle_enable_file_copy_paste',

@@ -246,10 +246,9 @@ impl VRamEncoder {
             .drain(..)
             .filter(|c| c.data_format == data_format)
             .collect();
-        if crate::hwcodec::HwRamEncoder::try_get(format).is_some() {
-            // has fallback, no need to require all adapters support
-            v
-        } else {
+        // Capture hosts must support every attached adapter when no RAM fallback exists.
+        #[cfg(all(feature = "capture", windows))]
+        if crate::hwcodec::HwRamEncoder::try_get(format).is_none() {
             let Ok(displays) = crate::Display::all() else {
                 log::error!("failed to get displays");
                 return vec![];
@@ -262,16 +261,15 @@ impl VRamEncoder {
                 .iter()
                 .map(|d| d.adapter_luid())
                 .collect::<Vec<_>>();
-            if luids
+            if !luids
                 .iter()
                 .all(|luid| v.iter().any(|f| Some(f.luid) == *luid))
             {
-                v
-            } else {
                 log::info!("not all adapters support {data_format:?}, luids = {luids:?}");
-                vec![]
+                return vec![];
             }
         }
+        v
     }
 
     pub fn encode(&mut self, texture: *mut c_void, ms: i64) -> ResultType<Vec<EncodeFrame>> {

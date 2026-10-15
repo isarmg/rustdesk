@@ -15,7 +15,6 @@ Peer _peer({
     hostname: hostname,
     alias: alias,
     platform: '',
-    forceAlwaysRelay: false,
   );
   peer.online = online;
   return peer;
@@ -24,8 +23,8 @@ Peer _peer({
 void main() {
   test('merged autocomplete peers retain LAN identity and recent online state', () {
     final peers = mergeAutocompletePeers(
-      lanPeers: [_peer(id: '123456789', alias: 'Office PC', username: 'lan-user')],
-      recentPeers: [_peer(id: '123456789', online: true)],
+      lanPeers: [_peer(id: '192.168.1.10:21118', alias: 'Office PC', username: 'lan-user')],
+      recentPeers: [_peer(id: '192.168.1.10:21118', online: true)],
     );
     expect(peers, hasLength(1));
     expect(peers.single.alias, 'Office PC');
@@ -33,20 +32,4 @@ void main() {
     expect(peers.single.online, isTrue);
   });
 
-  test('online callback updates currently displayed options', () async {
-    final loader = AllPeersLoader(
-      queryOnlines: (ids) async {},
-      queryOnlineDebounce: Duration(milliseconds: 1),
-    );
-    final displayedOptions = [_peer(id: '123456789')];
-
-    loader.queryOnlines(displayedOptions);
-    loader.updateOnlineStateForTesting({
-      'onlines': '123456789',
-      'offlines': '',
-    });
-
-    expect(displayedOptions.single.online, isTrue);
-    await Future.delayed(Duration(milliseconds: 2));
-  });
 }

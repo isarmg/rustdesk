@@ -92,9 +92,7 @@ class KeyboardShortcutsPageBodyState extends State<KeyboardShortcutsPageBody> {
   Future<void> _writeJson(Map<String, dynamic> json) async {
     await bind.mainSetLocalOption(
         key: kShortcutLocalConfigKey, value: jsonEncode(json));
-    // Refresh the matcher cache so writes take effect immediately. On native
-    // this hits the Rust matcher; on Web the bridge forwards to the JS-side
-    // matcher in flutter/web/js/.
+    // Refresh the Rust matcher cache so writes take effect immediately.
     bind.mainReloadKeyboardShortcuts();
     if (mounted) setState(() {});
   }

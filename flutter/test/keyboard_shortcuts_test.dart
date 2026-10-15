@@ -15,7 +15,6 @@ ShortcutPlatformCapabilities capabilities({
   bool includeTabShortcuts = true,
   bool includeToolbarShortcut = true,
   bool includeCloseTabShortcut = true,
-  bool includeSwitchSidesShortcut = true,
   bool includeResetCanvasShortcut = true,
   bool includePinToolbarShortcut = true,
   bool includeViewModeShortcut = true,
@@ -28,7 +27,6 @@ ShortcutPlatformCapabilities capabilities({
     includeTabShortcuts: includeTabShortcuts,
     includeToolbarShortcut: includeToolbarShortcut,
     includeCloseTabShortcut: includeCloseTabShortcut,
-    includeSwitchSidesShortcut: includeSwitchSidesShortcut,
     includeResetCanvasShortcut: includeResetCanvasShortcut,
     includePinToolbarShortcut: includePinToolbarShortcut,
     includeViewModeShortcut: includeViewModeShortcut,
@@ -192,7 +190,6 @@ void main() {
         includeTabShortcuts: false,
         includeToolbarShortcut: false,
         includeCloseTabShortcut: false,
-        includeSwitchSidesShortcut: false,
         includeResetCanvasShortcut: false,
         includePinToolbarShortcut: false,
         includeViewModeShortcut: false,
@@ -217,7 +214,6 @@ void main() {
         includeTabShortcuts: false,
         includeToolbarShortcut: false,
         includeCloseTabShortcut: false,
-        includeSwitchSidesShortcut: false,
         // Reset Canvas remains available on mobile.
         includeResetCanvasShortcut: true,
         includePinToolbarShortcut: false,
@@ -231,7 +227,6 @@ void main() {
     expect(ids, isNot(contains(kShortcutActionScreenshot)));
     expect(ids, isNot(contains(kShortcutActionToggleToolbar)));
     expect(ids, isNot(contains(kShortcutActionCloseTab)));
-    expect(ids, isNot(contains(kShortcutActionSwitchSides)));
     expect(ids, isNot(contains(kShortcutActionPinToolbar)));
     expect(ids, isNot(contains(kShortcutActionViewModeOriginal)));
     expect(ids, isNot(contains(kShortcutActionViewModeAdaptive)));
@@ -251,17 +246,19 @@ void main() {
       'enabled': true,
       'bindings': [
         {'action': 'toggle_chat', 'mods': ['ctrl'], 'key': 'c'},
+        {'action': 'switch_sides', 'mods': ['ctrl'], 'key': 's'},
         {'action': kShortcutActionToggleMute, 'mods': ['ctrl'], 'key': 'm'},
       ],
     }));
     final active = saved.forPlatform(capabilities());
     expect(active.bindings.map((b) => b['action']), [kShortcutActionToggleMute]);
-    expect(saved.bindings, hasLength(2));
+    expect(saved.bindings, hasLength(3));
   });
 
   test('streaming shortcut catalog omits removed feature actions', () {
     final ids = idSet(filterKeyboardShortcutActionGroupsForPlatform(capabilities()));
     expect(ids, isNot(contains('toggle_chat')));
+    expect(ids, isNot(contains('switch_sides')));
     expect(ids, isNot(contains('toggle_voice_call')));
     expect(ids, isNot(contains('toggle_recording')));
     expect(ids, isNot(contains('toggle_enable_file_copy_paste')));
@@ -298,7 +295,6 @@ void main() {
         includeTabShortcuts: false,
         includeToolbarShortcut: false,
         includeCloseTabShortcut: false,
-        includeSwitchSidesShortcut: false,
         includeResetCanvasShortcut: false,
         includePinToolbarShortcut: false,
         includeViewModeShortcut: false,

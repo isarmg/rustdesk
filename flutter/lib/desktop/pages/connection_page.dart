@@ -10,7 +10,6 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/popup_menu.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 
@@ -21,39 +20,27 @@ import '../../common/widgets/autocomplete.dart';
 import '../../models/platform_model.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 
-class OnlineStatusWidget extends StatefulWidget {
-  const OnlineStatusWidget({Key? key, this.onSvcStatusChanged})
+class ServiceStatusWidget extends StatefulWidget {
+  const ServiceStatusWidget({Key? key, this.onSvcStatusChanged})
       : super(key: key);
 
   final VoidCallback? onSvcStatusChanged;
 
   @override
-  State<OnlineStatusWidget> createState() => _OnlineStatusWidgetState();
+  State<ServiceStatusWidget> createState() => _ServiceStatusWidgetState();
 }
 
-/// State for the connection page.
-class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
+class _ServiceStatusWidgetState extends State<ServiceStatusWidget> {
   final _svcStopped = Get.find<RxBool>(tag: 'stop-service');
-  final _svcIsUsingPublicServer = true.obs;
   Timer? _updateTimer;
-
-  double get em => 14.0;
-  double? get height => bind.isIncomingOnly() ? null : em * 3;
-
-  void onUsePublicServerGuide() {
-    const url = "https://rustdesk.com/pricing";
-    canLaunchUrlString(url).then((can) {
-      if (can) {
-        launchUrlString(url);
-      }
-    });
-  }
 
   @override
   void initState() {
     super.initState();
     _updateTimer = periodic_immediate(Duration(seconds: 1), () async {
-      updateStatus();
+      final status = jsonDecode(await bind.mainGetConnectStatus())
+          as Map<String, dynamic>;
+      stateGlobal.videoConnCount.value = status['video_conn_count'] as int? ?? 0;
     });
   }
 
@@ -64,127 +51,17 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final isIncomingOnly = bind.isIncomingOnly();
-    startServiceWidget() => Offstage(
-          offstage: !_svcStopped.value,
-          child: InkWell(
-                  onTap: () async {
-                    await start_service(true);
-                  },
-                  child: Text(translate("Start service"),
-                      style: TextStyle(
-                          decoration: TextDecoration.underline, fontSize: em)))
-              .marginOnly(left: em),
-        );
-
-    setupServerWidget() => Flexible(
-          child: Offstage(
-            offstage: !(!_svcStopped.value &&
-                stateGlobal.svcStatus.value == SvcStatus.ready &&
-                _svcIsUsingPublicServer.value),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Text(', ', style: TextStyle(fontSize: em)),
-                Flexible(
-                  child: InkWell(
-                    onTap: onUsePublicServerGuide,
-                    child: Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            translate('setup_server_tip'),
-                            style: TextStyle(
-                                decoration: TextDecoration.underline,
-                                fontSize: em),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              ],
-            ),
+  Widget build(BuildContext context) => Obx(() {
+        widget.onSvcStatusChanged?.call();
+        if (!_svcStopped.value) return const SizedBox.shrink();
+        return Row(children: [
+          Text(translate('Service is not running')),
+          TextButton(
+            onPressed: () => start_service(true),
+            child: Text(translate('Start service')),
           ),
-        );
-
-    basicWidget() => Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Container(
-              height: 8,
-              width: 8,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(4),
-                color: _svcStopped.value ||
-                        stateGlobal.svcStatus.value == SvcStatus.connecting
-                    ? kColorWarn
-                    : (stateGlobal.svcStatus.value == SvcStatus.ready
-                        ? Color.fromARGB(255, 50, 190, 166)
-                        : Color.fromARGB(255, 224, 79, 95)),
-              ),
-            ).marginSymmetric(horizontal: em),
-            Container(
-              width: isIncomingOnly ? 226 : null,
-              child: _buildConnStatusMsg(),
-            ),
-            // stop
-            if (!isIncomingOnly) startServiceWidget(),
-            // ready && public
-            // No need to show the guide if is custom client.
-            if (!isIncomingOnly) setupServerWidget(),
-          ],
-        );
-
-    return Container(
-      height: height,
-      child: Obx(() => isIncomingOnly
-          ? Column(
-              children: [
-                basicWidget(),
-                Align(
-                        child: startServiceWidget(),
-                        alignment: Alignment.centerLeft)
-                    .marginOnly(top: 2.0, left: 22.0),
-              ],
-            )
-          : basicWidget()),
-    ).paddingOnly(right: isIncomingOnly ? 8 : 0);
-  }
-
-  _buildConnStatusMsg() {
-    widget.onSvcStatusChanged?.call();
-    return Text(
-      _svcStopped.value
-          ? translate("Service is not running")
-          : stateGlobal.svcStatus.value == SvcStatus.connecting
-              ? translate("connecting_status")
-              : stateGlobal.svcStatus.value == SvcStatus.notReady
-                  ? translate("not_ready_status")
-                  : translate('Ready'),
-      style: TextStyle(fontSize: em),
-    );
-  }
-
-  updateStatus() async {
-    final status =
-        jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
-    final statusNum = status['status_num'] as int;
-    if (statusNum == 0) {
-      stateGlobal.svcStatus.value = SvcStatus.connecting;
-    } else if (statusNum == -1) {
-      stateGlobal.svcStatus.value = SvcStatus.notReady;
-    } else if (statusNum == 1) {
-      stateGlobal.svcStatus.value = SvcStatus.ready;
-    } else {
-      stateGlobal.svcStatus.value = SvcStatus.notReady;
-    }
-    _svcIsUsingPublicServer.value = await bind.mainIsUsingPublicServer();
-    try {
-      stateGlobal.videoConnCount.value = status['video_conn_count'] as int;
-    } catch (_) {}
-  }
+        ]).paddingSymmetric(horizontal: 14);
+      });
 }
 
 /// Connection page for connecting to a remote peer.
@@ -319,7 +196,7 @@ class _ConnectionPageState extends State<ConnectionPage>
           ],
         ).paddingOnly(left: 12.0)),
         if (!isOutgoingOnly) const Divider(height: 1),
-        if (!isOutgoingOnly) OnlineStatusWidget()
+        if (!isOutgoingOnly) ServiceStatusWidget()
       ],
     );
   }
@@ -358,18 +235,9 @@ class _ConnectionPageState extends State<ConnectionPage>
                         hostname: '',
                         alias: '',
                         platform: '',
-                        forceAlwaysRelay: false,
                       );
                       _autocompleteOpts = [emptyPeer];
                     } else {
-                      String textWithoutSpaces =
-                          textEditingValue.text.replaceAll(" ", "");
-                      if (int.tryParse(textWithoutSpaces) != null) {
-                        textEditingValue = TextEditingValue(
-                          text: textWithoutSpaces,
-                          selection: textEditingValue.selection,
-                        );
-                      }
                       String textToFind = textEditingValue.text.toLowerCase();
                       _autocompleteOpts = _allPeersLoader.peers
                           .where((peer) =>
@@ -382,7 +250,6 @@ class _ConnectionPageState extends State<ConnectionPage>
                                   .contains(textToFind) ||
                               peer.alias.toLowerCase().contains(textToFind))
                           .toList();
-                      _allPeersLoader.queryOnlines(_autocompleteOpts);
                     }
                     return _autocompleteOpts;
                   },
@@ -414,7 +281,7 @@ class _ConnectionPageState extends State<ConnectionPage>
                               counterText: '',
                               hintText: _idInputFocused.value
                                   ? null
-                                  : translate('Enter Remote ID'),
+                                  : translate('Enter IP address or hostname'),
                               contentPadding: const EdgeInsets.symmetric(
                                   horizontal: 15, vertical: 13)),
                           controller: fieldTextEditingController,

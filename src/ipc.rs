@@ -20,10 +20,10 @@ pub(crate) use ipc_drm::DrmConn;
 pub(crate) use ipc_drm::connect_drm;
 
 use crate::{
-    common::{is_server, CheckTestNatType},
+    common::is_server,
     privacy_mode,
     privacy_mode::PrivacyModeState,
-    rendezvous_mediator::RendezvousMediator,
+    direct_server::DirectServer,
     ui_interface::{get_local_option, set_local_option},
 };
 use bytes::Bytes;
@@ -44,7 +44,7 @@ use hbb_common::{
     tokio_util::codec::Framed,
     ResultType,
 };
-use base::config::keys::{self, OPTION_ALLOW_WEBSOCKET};
+use base::config::keys;
 #[cfg(windows)]
 pub(crate) use ipc_auth::authorize_windows_portable_service_ipc_connection;
 #[cfg(windows)]
@@ -210,14 +210,6 @@ pub enum DataPortableService {
     CmShowElevation(bool),
 }
 
-#[cfg(feature = "flutter")]
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
-pub enum SwitchSidesUuidAction {
-    Check,
-    Consume,
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "t", content = "c")]
 pub enum Data {
@@ -237,7 +229,6 @@ pub enum Data {
 
         block_input: bool,
         privacy_mode: bool,
-        from_switch: bool,
     },
 
     SwitchPermission {
@@ -256,10 +247,7 @@ pub enum Data {
     OnlineStatus(Option<(i64, bool)>),
     Config((String, Option<String>)),
     Options(Option<HashMap<String, String>>),
-    NatType(Option<i32>),
-    ConfirmedKey(Option<(Vec<u8>, Vec<u8>)>),
     RawMessage(Vec<u8>),
-    Socks(Option<config::Socks5Server>),
 
     Test,
     SyncConfig(Option<Box<(Config, Config2)>>),
@@ -267,8 +255,6 @@ pub enum Data {
     #[cfg(target_os = "windows")]
     ClipboardNonFile(Option<(String, Vec<ClipboardNonFile>)>),
     PrivacyModeState((i32, PrivacyModeState, String)),
-    TestRendezvousServer,
-    Deployed,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Keyboard(DataKeyboard),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -281,18 +267,7 @@ pub enum Data {
     Empty,
     Disconnected,
     DataPortableService(DataPortableService),
-    #[cfg(feature = "flutter")]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    SwitchSidesRequest(String),
-    #[cfg(feature = "flutter")]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    SwitchSidesUuid(String, String, SwitchSidesUuidAction, Option<bool>),
-    #[cfg(feature = "flutter")]
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    SwitchSidesBack,
     UrlLink(String),
-    #[cfg(windows)]
-    SyncWinCpuUsage(Option<f64>),
 
     #[cfg(windows)]
     ControlledSessionCount(usize),
@@ -313,7 +288,6 @@ pub enum Data {
     ))]
     ControllingSessionCount(usize),
 
-    SocksWs(Option<Box<(Option<config::Socks5Server>, String)>>),
     #[cfg(target_os = "macos")]
     HasNoActiveConns(Option<bool>),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -334,7 +308,7 @@ pub enum Data {
     // to upstream. `_drm` protocol: the client sends `DrmHello`, the service `DrmDisplayList`, the
     // client replies `DrmStart{display}`, then the service streams `DrmFrame` + send_raw(BGRA) and
     // `DrmCursor` + send_raw(RGBA). A frame/cursor header is ALWAYS immediately followed by exactly
-    // one `send_raw()` payload (the same header-then-raw pairing as `FileBlockFromCM`). This keeps
+    // one `send_raw()` payload. This keeps
     // the header extensible. The zero-copy `DrmFrameDmabuf(DmabufDesc)` sibling below carries only a
     // small JSON metadata descriptor; the scanout dma-buf fd rides an SCM_RIGHTS ancillary message on
     // the same `DrmConn` send (see `DrmConn::send_msg`), so it has NO trailing `send_raw()` body.
@@ -588,52 +562,28 @@ pub async fn new_listener(postfix: &str) -> ResultType<Incoming> {
 
 pub struct CheckIfRestart {
     stop_service: String,
-    rendezvous_servers: Vec<String>,
+    direct_port: String,
     audio_input: String,
-    ws: String,
-    disable_udp: String,
-    allow_insecure_tls_fallback: String,
-    api_server: String,
 }
 
 impl CheckIfRestart {
-    pub fn new() -> CheckIfRestart {
-        CheckIfRestart {
+    pub fn new() -> Self {
+        Self {
             stop_service: Config::get_option("stop-service"),
-            rendezvous_servers: Config::get_rendezvous_servers(),
+            direct_port: Config::get_option("direct-access-port"),
             audio_input: Config::get_option("audio-input"),
-            ws: Config::get_option(OPTION_ALLOW_WEBSOCKET),
-            disable_udp: Config::get_option(keys::OPTION_DISABLE_UDP),
-            allow_insecure_tls_fallback: Config::get_option(
-                keys::OPTION_ALLOW_INSECURE_TLS_FALLBACK,
-            ),
-            api_server: Config::get_option("api-server"),
         }
     }
 }
 impl Drop for CheckIfRestart {
     fn drop(&mut self) {
-        // If https proxy is used, we need to restart rendezvous mediator.
-        // No need to check if https proxy is used, because this option does not change frequently
-        // and restarting mediator is safe even https proxy is not used.
-        let allow_insecure_tls_fallback_changed = self.allow_insecure_tls_fallback
-            != Config::get_option(keys::OPTION_ALLOW_INSECURE_TLS_FALLBACK);
-        if allow_insecure_tls_fallback_changed
-            || self.stop_service != Config::get_option("stop-service")
-            || self.rendezvous_servers != Config::get_rendezvous_servers()
-            || self.ws != Config::get_option(OPTION_ALLOW_WEBSOCKET)
-            || self.disable_udp != Config::get_option(keys::OPTION_DISABLE_UDP)
-            || self.api_server != Config::get_option("api-server")
-        {
-            if allow_insecure_tls_fallback_changed {
-                hbb_common::tls::reset_tls_cache();
-            }
-            RendezvousMediator::restart();
+        if self.stop_service != Config::get_option("stop-service")
+            || self.direct_port != Config::get_option("direct-access-port") {
+            DirectServer::restart();
         }
         if self.audio_input != Config::get_option("audio-input") {
             crate::audio_service::restart();
         }
-
     }
 }
 
@@ -696,56 +646,11 @@ async fn handle(data: Data, stream: &mut Connection) {
             }
         }
         Data::OnlineStatus(_) => {
-            let x = config::get_online_state();
-            let confirmed = Config::get_key_confirmed();
+            let x = if crate::direct_server::direct_server_running() { 1 } else { 0 };
+            let confirmed = true;
             allow_err!(stream.send(&Data::OnlineStatus(Some((x, confirmed)))).await);
         }
-        Data::ConfirmedKey(None) => {
-            let out = if Config::get_key_confirmed() {
-                Some(Config::get_key_pair())
-            } else {
-                None
-            };
-            allow_err!(stream.send(&Data::ConfirmedKey(out)).await);
-        }
-        Data::Socks(s) => match s {
-            None => {
-                allow_err!(stream.send(&Data::Socks(Config::get_socks())).await);
-            }
-            Some(data) => {
-                let _nat = CheckTestNatType::new();
-                if data.proxy.is_empty() {
-                    Config::set_socks(None);
-                } else {
-                    Config::set_socks(Some(data));
-                }
-                RendezvousMediator::restart();
-                log::info!("socks updated");
-            }
-        },
-        Data::SocksWs(s) => match s {
-            None => {
-                allow_err!(
-                    stream
-                        .send(&Data::SocksWs(Some(Box::new((
-                            Config::get_socks(),
-                            Config::get_option(OPTION_ALLOW_WEBSOCKET)
-                        )))))
-                        .await
-                );
-            }
-            _ => {}
-        },
-        #[cfg(feature = "flutter")]
-        Data::VideoConnCount(None) => {
-            let n = crate::server::AUTHED_CONNS
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|x| x.conn_type == crate::server::AuthConnType::Remote)
-                .count();
-            allow_err!(stream.send(&Data::VideoConnCount(Some(n))).await);
-        }
+
         Data::Config((name, value)) => match value {
             None => {
                 let value;
@@ -770,20 +675,8 @@ async fn handle(data: Data, stream: &mut Connection) {
                     });
                 } else if name == "salt" {
                     value = Some(Config::get_salt());
-                } else if name == "rendezvous_server" {
-                    value = Some(format!(
-                        "{},{}",
-                        Config::get_rendezvous_server(),
-                        Config::get_rendezvous_servers().join(",")
-                    ));
-                } else if name == "rendezvous_servers" {
-                    value = Some(Config::get_rendezvous_servers().join(","));
                 } else if name == "fingerprint" {
-                    value = if Config::get_key_confirmed() {
-                        Some(crate::common::pk_to_fingerprint(Config::get_key_pair().1))
-                    } else {
-                        None
-                    };
+                    value = crate::direct_server::direct_server_running().then(|| crate::common::pk_to_fingerprint(Config::get_key_pair().1));
                 } else if name == "hide_cm" {
                     value = if crate::common::is_custom_client()
                     {
@@ -804,12 +697,11 @@ async fn handle(data: Data, stream: &mut Connection) {
             Some(value) => {
                 let mut updated = true;
                 if name == "id" {
-                    // An empty id would wipe the local id and unconfirm the key (cf. #15626).
+                    // An empty id would wipe the local id (cf. #15626).
                     if value.is_empty() {
                         log::warn!("Ignoring empty id write over IPC");
                         updated = false;
                     } else {
-                        Config::set_key_confirmed(false);
                         Config::set_id(&value);
                     }
                 } else if name == "temporary-password" {
@@ -846,7 +738,7 @@ async fn handle(data: Data, stream: &mut Connection) {
             }
             Some(value) => {
                 let _chk = CheckIfRestart::new();
-                let _nat = CheckTestNatType::new();
+
                 if let Some(v) = value.get("privacy-mode-impl-key") {
                     crate::privacy_mode::switch(v);
                 }
@@ -854,10 +746,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                 allow_err!(stream.send(&Data::Options(None)).await);
             }
         },
-        Data::NatType(_) => {
-            let t = Config::get_nat_type();
-            allow_err!(stream.send(&Data::NatType(Some(t))).await);
-        }
+
         Data::SyncConfig(Some(configs)) => {
             let (config, config2) = *configs;
             let _chk = CheckIfRestart::new();
@@ -871,54 +760,6 @@ async fn handle(data: Data, stream: &mut Connection) {
                     .send(&Data::SyncConfig(Some(
                         (Config::get(), Config2::get()).into()
                     )))
-                    .await
-            );
-        }
-        #[cfg(windows)]
-        Data::SyncWinCpuUsage(None) => {
-            allow_err!(
-                stream
-                    .send(&Data::SyncWinCpuUsage(
-                        base::platform::windows::cpu_uage_one_minute()
-                    ))
-                    .await
-            );
-        }
-        Data::TestRendezvousServer => {
-            crate::test_rendezvous_server();
-        }
-        Data::Deployed => {
-            crate::rendezvous_mediator::NEEDS_DEPLOY.store(false, Ordering::SeqCst);
-            crate::rendezvous_mediator::RendezvousMediator::restart();
-        }
-        #[cfg(feature = "flutter")]
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        Data::SwitchSidesRequest(id) => {
-            let uuid = uuid::Uuid::new_v4();
-            crate::server::insert_switch_sides_uuid(id, uuid.clone());
-            allow_err!(
-                stream
-                    .send(&Data::SwitchSidesRequest(uuid.to_string()))
-                    .await
-            );
-        }
-        #[cfg(feature = "flutter")]
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        Data::SwitchSidesUuid(uuid, id, action, None) => {
-            let allowed = uuid
-                .parse::<uuid::Uuid>()
-                .map(|uuid| match action {
-                    SwitchSidesUuidAction::Check => {
-                        crate::server::has_pending_switch_sides_uuid(&id, &uuid)
-                    }
-                    SwitchSidesUuidAction::Consume => {
-                        crate::server::claim_pending_switch_sides_uuid(&id, &uuid)
-                    }
-                })
-                .unwrap_or(false);
-            allow_err!(
-                stream
-                    .send(&Data::SwitchSidesUuid(uuid, id, action, Some(allowed)))
                     .await
             );
         }
@@ -1610,7 +1451,6 @@ pub fn get_id() -> String {
                 Config::set_salt(&v2);
             }
             if v != Config::get_id() {
-                Config::set_key_confirmed(false);
                 Config::set_id(&v);
             }
             return v;
@@ -1619,19 +1459,6 @@ pub fn get_id() -> String {
     Config::get_id()
 }
 
-pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>) {
-    if let Ok(Some(v)) = get_config_async("rendezvous_server", ms_timeout).await {
-        let mut urls = v.split(",");
-        let a = urls.next().unwrap_or_default().to_owned();
-        let b: Vec<String> = urls.map(|x| x.to_owned()).collect();
-        (a, b)
-    } else {
-        (
-            Config::get_rendezvous_server(),
-            Config::get_rendezvous_servers(),
-        )
-    }
-}
 
 async fn get_options_(ms_timeout: u64) -> ResultType<HashMap<String, String>> {
     let mut c = connect(ms_timeout, "").await?;
@@ -1673,7 +1500,7 @@ pub fn set_option(key: &str, value: &str) {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn set_options(value: HashMap<String, String>) -> ResultType<()> {
-    let _nat = CheckTestNatType::new();
+
     if let Ok(mut c) = connect(1000, "").await {
         c.send(&Data::Options(Some(value.clone()))).await?;
         // do not put below before connect, because we need to check should_exit
@@ -1683,106 +1510,6 @@ pub async fn set_options(value: HashMap<String, String>) -> ResultType<()> {
     Ok(())
 }
 
-#[inline]
-async fn get_nat_type_(ms_timeout: u64) -> ResultType<i32> {
-    let mut c = connect(ms_timeout, "").await?;
-    c.send(&Data::NatType(None)).await?;
-    if let Some(Data::NatType(Some(value))) = c.next_timeout(ms_timeout).await? {
-        Config::set_nat_type(value);
-        Ok(value)
-    } else {
-        Ok(Config::get_nat_type())
-    }
-}
-
-pub async fn get_nat_type(ms_timeout: u64) -> i32 {
-    get_nat_type_(ms_timeout)
-        .await
-        .unwrap_or(Config::get_nat_type())
-}
-
-pub async fn get_rendezvous_servers(ms_timeout: u64) -> Vec<String> {
-    if let Ok(Some(v)) = get_config_async("rendezvous_servers", ms_timeout).await {
-        return v.split(',').map(|x| x.to_owned()).collect();
-    }
-    return Config::get_rendezvous_servers();
-}
-
-#[inline]
-async fn get_socks_(ms_timeout: u64) -> ResultType<Option<config::Socks5Server>> {
-    let mut c = connect(ms_timeout, "").await?;
-    c.send(&Data::Socks(None)).await?;
-    if let Some(Data::Socks(value)) = c.next_timeout(ms_timeout).await? {
-        Config::set_socks(value.clone());
-        Ok(value)
-    } else {
-        Ok(Config::get_socks())
-    }
-}
-
-pub async fn get_socks_async(ms_timeout: u64) -> Option<config::Socks5Server> {
-    get_socks_(ms_timeout).await.unwrap_or(Config::get_socks())
-}
-
-#[tokio::main(flavor = "current_thread")]
-pub async fn get_socks() -> Option<config::Socks5Server> {
-    get_socks_async(1_000).await
-}
-
-#[tokio::main(flavor = "current_thread")]
-pub async fn set_socks(value: config::Socks5Server) -> ResultType<()> {
-    let _nat = CheckTestNatType::new();
-    Config::set_socks(if value.proxy.is_empty() {
-        None
-    } else {
-        Some(value.clone())
-    });
-    connect(1_000, "")
-        .await?
-        .send(&Data::Socks(Some(value)))
-        .await?;
-    Ok(())
-}
-
-async fn get_socks_ws_(ms_timeout: u64) -> ResultType<(Option<config::Socks5Server>, String)> {
-    let mut c = connect(ms_timeout, "").await?;
-    c.send(&Data::SocksWs(None)).await?;
-    if let Some(Data::SocksWs(Some(value))) = c.next_timeout(ms_timeout).await? {
-        Config::set_socks(value.0.clone());
-        Config::set_option(OPTION_ALLOW_WEBSOCKET.to_string(), value.1.clone());
-        Ok(*value)
-    } else {
-        Ok((
-            Config::get_socks(),
-            Config::get_option(OPTION_ALLOW_WEBSOCKET),
-        ))
-    }
-}
-
-#[tokio::main(flavor = "current_thread")]
-pub async fn get_socks_ws() -> (Option<config::Socks5Server>, String) {
-    get_socks_ws_(1_000).await.unwrap_or((
-        Config::get_socks(),
-        Config::get_option(OPTION_ALLOW_WEBSOCKET),
-    ))
-}
-
-pub fn get_proxy_status() -> bool {
-    Config::get_socks().is_some()
-}
-#[tokio::main(flavor = "current_thread")]
-pub async fn test_rendezvous_server() -> ResultType<()> {
-    let mut c = connect(1000, "").await?;
-    c.send(&Data::TestRendezvousServer).await?;
-    Ok(())
-}
-
-#[tokio::main(flavor = "current_thread")]
-pub async fn notify_deployed() -> ResultType<()> {
-    let mut c = connect(1000, "").await?;
-    c.send(&Data::Deployed).await?;
-    Ok(())
-}
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn send_url_scheme(url: String) -> ResultType<()> {
@@ -1977,5 +1704,21 @@ mod test {
     #[test]
     fn test_select_server_uid_fails_when_multiple_servers_are_ambiguous() {
         assert!(select_server_uid_for_user_main_ipc(&[501, 502], None, false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod retired_role_switch_ipc_tests {
+    #[test]
+    fn old_switch_commands_cannot_be_deserialized() {
+        for command in [
+            r#"{"t":"SwitchSidesRequest","c":"peer"}"#,
+            r#"{"t":"SwitchSidesUuid","c":["uuid","peer","Check",null]}"#,
+            r#"{"t":"SwitchSidesUuid","c":["uuid","peer","Consume",null]}"#,
+            r#"{"t":"SwitchSidesBack"}"#,
+        ] {
+            assert!(serde_json::from_str::<super::Data>(command).is_err());
+        }
+        assert!(serde_json::from_str::<super::Data>(r#"{"t":"Disconnected"}"#).is_ok());
     }
 }

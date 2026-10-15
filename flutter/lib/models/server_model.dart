@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/main.dart';
-import 'package:flutter_hbb/mobile/pages/settings_page.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:get/get.dart';
 import 'package:window_manager/window_manager.dart';
@@ -13,7 +12,6 @@ import '../common.dart';
 import '../common/formatter/id_formatter.dart';
 import '../desktop/pages/server_page.dart' as desktop;
 import '../desktop/widgets/tabbar_widget.dart';
-import '../mobile/pages/server_page.dart';
 import 'model.dart';
 
 const kLoginDialogTag = "LOGIN";
@@ -23,14 +21,8 @@ const kUsePermanentPassword = "use-permanent-password";
 const kUseBothPasswords = "use-both-passwords";
 
 class ServerModel with ChangeNotifier {
-  bool _isStart = false; // Android MainService status
-  bool _mediaOk = false;
-  bool _inputOk = false;
-  bool _audioOk = false;
-  bool _clipboardOk = false;
   bool _showElevation = false;
   bool hideCm = false;
-  int _connectStatus = 0; // Rendezvous Server status
   String _verificationMethod = "";
   String _temporaryPasswordLength = "";
   bool _allowNumericOneTimePassword = false;
@@ -48,22 +40,7 @@ class ServerModel with ChangeNotifier {
 
   Timer? cmHiddenTimer;
 
-  final _wakelockKey = UniqueKey();
-
-  bool get isStart => _isStart;
-
-  bool get mediaOk => _mediaOk;
-
-  bool get inputOk => _inputOk;
-
-  bool get audioOk => _audioOk;
-
-
-  bool get clipboardOk => _clipboardOk;
-
   bool get showElevation => _showElevation;
-
-  int get connectStatus => _connectStatus;
 
   String get verificationMethod {
     final index = [
@@ -123,8 +100,6 @@ class ServerModel with ChangeNotifier {
 
   List<Client> get clients => _clients;
 
-  final controller = ScrollController();
-
   WeakReference<FFI> parent;
 
   ServerModel(this.parent) {
@@ -145,14 +120,6 @@ class ServerModel with ChangeNotifier {
     */
 
     timerCallback() async {
-      final connectionStatus =
-          jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
-      final statusNum = connectionStatus['status_num'] as int;
-      if (statusNum != _connectStatus) {
-        _connectStatus = statusNum;
-        notifyListeners();
-      }
-
       if (desktopType == DesktopType.cm) {
         final res = await bind.cmCheckClientsLength(length: _clients.length);
         if (res != null) {
@@ -175,7 +142,7 @@ class ServerModel with ChangeNotifier {
       updatePasswordModel();
     }
 
-    if (!isTest) {
+    if (isDesktop && !isTest) {
       Future.delayed(Duration.zero, () async {
         if (await bind.optionSynced()) {
           await timerCallback();
@@ -185,33 +152,6 @@ class ServerModel with ChangeNotifier {
         await timerCallback();
       });
     }
-
-    // Initial keyboard status is off on mobile
-    if (isMobile) {
-      bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
-    }
-  }
-
-  /// 1. check android permission
-  /// 2. check config
-  /// audio true by default (if permission on) (false default < Android 10)
-  /// file true by default (if permission on)
-  checkAndroidPermission() async {
-    // audio
-    if (androidVersion < 30 ||
-        !await AndroidPermissionManager.check(kRecordAudio)) {
-      _audioOk = false;
-      bind.mainSetOption(key: kOptionEnableAudio, value: "N");
-    } else {
-      final audioOption = await bind.mainGetOption(key: kOptionEnableAudio);
-      _audioOk = audioOption != 'N';
-    }
-
-    // clipboard
-    final clipOption = await bind.mainGetOption(key: kOptionEnableClipboard);
-    _clipboardOk = clipOption != 'N';
-
-    notifyListeners();
   }
 
   updatePasswordModel() async {
@@ -284,154 +224,12 @@ class ServerModel with ChangeNotifier {
     }
   }
 
-  toggleAudio() async {
-    if (clients.any((c) => !c.disconnected)) {
-      await showClientsMayNotBeChangedAlert(parent.target);
-    }
-    if (!_audioOk && !await AndroidPermissionManager.check(kRecordAudio)) {
-      final res = await AndroidPermissionManager.request(kRecordAudio);
-      if (!res) {
-        showToast(translate('Failed'));
-        return;
-      }
-    }
-
-    _audioOk = !_audioOk;
-    bind.mainSetOption(
-        key: kOptionEnableAudio, value: _audioOk ? defaultOptionYes : 'N');
-    notifyListeners();
-  }
-
-  toggleClipboard() async {
-    _clipboardOk = !clipboardOk;
-    bind.mainSetOption(
-        key: kOptionEnableClipboard,
-        value: clipboardOk ? defaultOptionYes : 'N');
-    notifyListeners();
-  }
-
-  toggleInput() async {
-    if (clients.any((c) => !c.disconnected)) {
-      await showClientsMayNotBeChangedAlert(parent.target);
-    }
-    if (_inputOk) {
-      parent.target?.invokeMethod("stop_input");
-      bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
-    } else {
-      if (parent.target != null) {
-        /// the result of toggle-on depends on user actions in the settings page.
-        /// handle result, see [ServerModel.changeStatue]
-        showInputWarnAlert(parent.target!);
-      }
-    }
-  }
-
-  Future<bool> checkRequestNotificationPermission() async {
-    debugPrint("androidVersion $androidVersion");
-    if (androidVersion < 33) {
-      return true;
-    }
-    if (await AndroidPermissionManager.check(kAndroid13Notification)) {
-      debugPrint("notification permission already granted");
-      return true;
-    }
-    var res = await AndroidPermissionManager.request(kAndroid13Notification);
-    debugPrint("notification permission request result: $res");
-    return res;
-  }
-
-  Future<bool> checkFloatingWindowPermission() async {
-    debugPrint("androidVersion $androidVersion");
-    if (androidVersion < 23) {
-      return false;
-    }
-    if (await AndroidPermissionManager.check(kSystemAlertWindow)) {
-      debugPrint("alert window permission already granted");
-      return true;
-    }
-    var res = await AndroidPermissionManager.request(kSystemAlertWindow);
-    debugPrint("alert window permission request result: $res");
-    return res;
-  }
-
-  /// Toggle the screen sharing service.
-  toggleService() async {
-    if (_isStart) {
-      final res = await parent.target?.dialogManager
-          .show<bool>((setState, close, context) {
-        submit() => close(true);
-        return CustomAlertDialog(
-          title: Row(children: [
-            const Icon(Icons.warning_amber_sharp,
-                color: Colors.redAccent, size: 28),
-            const SizedBox(width: 10),
-            Text(translate("Warning")),
-          ]),
-          content: Text(translate("android_stop_service_tip")),
-          actions: [
-            TextButton(onPressed: close, child: Text(translate("Cancel"))),
-            TextButton(onPressed: submit, child: Text(translate("OK"))),
-          ],
-          onSubmit: submit,
-          onCancel: close,
-        );
-      });
-      if (res == true) {
-        stopService();
-      }
-    } else {
-      await checkRequestNotificationPermission();
-      if (bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) != 'Y') {
-        await checkFloatingWindowPermission();
-      }
-      final res = await parent.target?.dialogManager
-          .show<bool>((setState, close, context) {
-        submit() => close(true);
-        return CustomAlertDialog(
-          title: Row(children: [
-            const Icon(Icons.warning_amber_sharp,
-                color: Colors.redAccent, size: 28),
-            const SizedBox(width: 10),
-            Text(translate("Warning")),
-          ]),
-          content: Text(translate("android_service_will_start_tip")),
-          actions: [
-            dialogButton("Cancel", onPressed: close, isOutline: true),
-            dialogButton("OK", onPressed: submit),
-          ],
-          onSubmit: submit,
-          onCancel: close,
-        );
-      });
-      if (res == true) {
-        startService();
-      }
-    }
-  }
-
   /// Start the screen sharing service.
   Future<void> startService() async {
-    _isStart = true;
+    if (!isDesktop) return;
     notifyListeners();
     parent.target?.ffiModel.updateEventListener(parent.target!.sessionId, "");
-    await parent.target?.invokeMethod("init_service");
-    // ugly is here, because for desktop, below is useless
-    await bind.mainStartService();
     updateClientState();
-    if (isAndroid) {
-      androidUpdatekeepScreenOn();
-    }
-  }
-
-  /// Stop the screen sharing service.
-  Future<void> stopService() async {
-    _isStart = false;
-    closeAll();
-    await parent.target?.invokeMethod("stop_service");
-    await bind.mainStopService();
-    notifyListeners();
-    // for androidUpdatekeepScreenOn only
-    WakelockManager.disable(_wakelockKey);
   }
 
   fetchID() async {
@@ -440,29 +238,6 @@ class ServerModel with ChangeNotifier {
       _serverId.id = id;
       notifyListeners();
     }
-  }
-
-  changeStatue(String name, bool value) {
-    debugPrint("changeStatue value $value");
-    switch (name) {
-      case "media":
-        _mediaOk = value;
-        if (value && !_isStart) {
-          startService();
-        }
-        break;
-      case "input":
-        if (_inputOk != value) {
-          bind.mainSetOption(
-              key: kOptionEnableKeyboard,
-              value: value ? defaultOptionYes : 'N');
-        }
-        _inputOk = value;
-        break;
-      default:
-        return;
-    }
-    notifyListeners();
   }
 
   // force
@@ -499,7 +274,6 @@ class ServerModel with ChangeNotifier {
     }
     if (_clients.length != oldClientLenght) {
       notifyListeners();
-      if (isAndroid) androidUpdatekeepScreenOn();
     }
   }
 
@@ -540,10 +314,7 @@ class ServerModel with ChangeNotifier {
       if (desktopType == DesktopType.cm && !hideCm) {
         showCmWindow();
       }
-      scrollToBottom();
       notifyListeners();
-      if (isAndroid && !client.authorized) showLoginDialog(client);
-      if (isAndroid) androidUpdatekeepScreenOn();
     } catch (e) {
       debugPrint("Failed to call loginRequest,error:$e");
     }
@@ -568,83 +339,16 @@ class ServerModel with ChangeNotifier {
     }
   }
 
-  void showLoginDialog(Client client) {
-    showClientDialog(
-      client,
-      "Share screen",
-      'Do you accept?',
-      'android_new_connection_tip',
-      () => sendLoginResponse(client, false),
-      () => sendLoginResponse(client, true),
-    );
-  }
-
-  showClientDialog(Client client, String title, String contentTitle,
-      String content, VoidCallback onCancel, VoidCallback onSubmit) {
-    parent.target?.dialogManager.show((setState, close, context) {
-      cancel() {
-        onCancel();
-        close();
-      }
-
-      submit() {
-        onSubmit();
-        close();
-      }
-
-      return CustomAlertDialog(
-        title:
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(translate(title)),
-          IconButton(onPressed: close, icon: const Icon(Icons.close))
-        ]),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(translate(contentTitle)),
-            ClientInfo(client),
-            Text(
-              translate(content),
-              style: Theme.of(globalKey.currentContext!).textTheme.bodyMedium,
-            ),
-          ],
-        ),
-        actions: [
-          dialogButton("Dismiss", onPressed: cancel, isOutline: true),
-          if (approveMode != 'password')
-            dialogButton("Accept", onPressed: submit),
-        ],
-        onSubmit: submit,
-        onCancel: cancel,
-      );
-    }, tag: getLoginDialogTag(client.id));
-  }
-
-  scrollToBottom() {
-    if (isDesktop) return;
-    Future.delayed(Duration(milliseconds: 200), () {
-      controller.animateTo(controller.position.maxScrollExtent,
-          duration: Duration(milliseconds: 200),
-          curve: Curves.fastLinearToSlowEaseIn);
-    });
-  }
-
   void sendLoginResponse(Client client, bool res) async {
     if (res) {
       bind.cmLoginRes(connId: client.id, res: res);
-      parent.target?.invokeMethod("start_capture");
-      parent.target?.invokeMethod("cancel_notification", client.id);
       client.authorized = true;
       notifyListeners();
     } else {
       bind.cmLoginRes(connId: client.id, res: res);
-      parent.target?.invokeMethod("cancel_notification", client.id);
       final index = _clients.indexOf(client);
       tabController.remove(index);
       _clients.remove(client);
-      if (isAndroid) androidUpdatekeepScreenOn();
     }
   }
 
@@ -663,12 +367,10 @@ class ServerModel with ChangeNotifier {
           }
         }
         parent.target?.dialogManager.dismissByTag(getLoginDialogTag(id));
-        parent.target?.invokeMethod("cancel_notification", id);
       }
       if (desktopType == DesktopType.cm && _clients.isEmpty) {
         hideCmWindow();
       }
-      if (isAndroid) androidUpdatekeepScreenOn();
       notifyListeners();
     } catch (e) {
       debugPrint("onClientRemove failed,error:$e");
@@ -684,7 +386,6 @@ class ServerModel with ChangeNotifier {
         : bind.cmCloseConnectionWindow(connId: client.id)));
     _clients.clear();
     tabController.state.value.tabs.clear();
-    if (isAndroid) androidUpdatekeepScreenOn();
   }
 
   void jumpTo(int id) {
@@ -699,24 +400,6 @@ class ServerModel with ChangeNotifier {
     }
   }
 
-  void androidUpdatekeepScreenOn() async {
-    if (!isAndroid) return;
-    var floatingWindowDisabled =
-        bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) == "Y" ||
-            !await AndroidPermissionManager.check(kSystemAlertWindow);
-    final keepScreenOn = floatingWindowDisabled
-        ? KeepScreenOn.never
-        : optionToKeepScreenOn(
-            bind.mainGetLocalOption(key: kOptionKeepScreenOn));
-    final on = ((keepScreenOn == KeepScreenOn.serviceOn) && _isStart) ||
-        (keepScreenOn == KeepScreenOn.duringControlled &&
-            _clients.map((e) => !e.disconnected).isNotEmpty);
-    if (on) {
-      WakelockManager.enable(_wakelockKey, isServer: true);
-    } else {
-      WakelockManager.disable(_wakelockKey);
-    }
-  }
 }
 
 enum ClientType { remote }
@@ -734,7 +417,6 @@ class Client {
   bool blockInput = false;
   bool privacyMode = false;
   bool disconnected = false;
-  bool fromSwitch = false;
 
 
   Client(this.id, this.authorized,
@@ -753,7 +435,6 @@ class Client {
     blockInput = json['block_input'];
     privacyMode = json['privacy_mode'] ?? privacyMode;
     disconnected = json['disconnected'];
-    fromSwitch = json['from_switch'];
   }
 
   Map<String, dynamic> toJson() {
@@ -770,7 +451,6 @@ class Client {
     data['block_input'] = blockInput;
     data['privacy_mode'] = privacyMode;
     data['disconnected'] = disconnected;
-    data['from_switch'] = fromSwitch;
     return data;
   }
 
@@ -781,50 +461,4 @@ class Client {
 
 String getLoginDialogTag(int id) {
   return kLoginDialogTag + id.toString();
-}
-
-showInputWarnAlert(FFI ffi) {
-  ffi.dialogManager.show((setState, close, context) {
-    submit() {
-      AndroidPermissionManager.startAction(kActionAccessibilitySettings);
-      close();
-    }
-
-    return CustomAlertDialog(
-      title: Text(translate("How to get Android input permission?")),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(translate("android_input_permission_tip1")),
-          const SizedBox(height: 10),
-          Text(translate("android_input_permission_tip2")),
-        ],
-      ),
-      actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
-        dialogButton("Open System Setting", onPressed: submit),
-      ],
-      onSubmit: submit,
-      onCancel: close,
-    );
-  });
-}
-
-Future<void> showClientsMayNotBeChangedAlert(FFI? ffi) async {
-  await ffi?.dialogManager.show((setState, close, context) {
-    return CustomAlertDialog(
-      title: Text(translate("Permissions")),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(translate("android_permission_may_not_change_tip")),
-        ],
-      ),
-      actions: [
-        dialogButton("OK", onPressed: close),
-      ],
-      onSubmit: close,
-      onCancel: close,
-    );
-  });
 }

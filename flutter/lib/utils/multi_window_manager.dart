@@ -199,8 +199,6 @@ class RustDeskMultiWindowManager {
     String remoteId,
     List<int> windows, {
     String? password,
-    bool? forceRelay,
-    String? switchUuid,
     bool? isSharedPassword,
     String? connToken,
   }) async {
@@ -208,11 +206,7 @@ class RustDeskMultiWindowManager {
       "type": type.index,
       "id": remoteId,
       "password": password,
-      "forceRelay": forceRelay
     };
-    if (switchUuid != null) {
-      params['switch_uuid'] = switchUuid;
-    }
     if (isSharedPassword != null) {
       params['isSharedPassword'] = isSharedPassword;
     }
@@ -241,8 +235,6 @@ class RustDeskMultiWindowManager {
     String remoteId, {
     String? password,
     bool? isSharedPassword,
-    String? switchUuid,
-    bool? forceRelay,
   }) async {
     return await newSession(
       WindowType.RemoteDesktop,
@@ -250,8 +242,6 @@ class RustDeskMultiWindowManager {
       remoteId,
       _remoteDesktopWindows,
       password: password,
-      forceRelay: forceRelay,
-      switchUuid: switchUuid,
       isSharedPassword: isSharedPassword,
     );
   }

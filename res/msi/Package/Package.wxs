@@ -28,11 +28,15 @@
 		<ui:WixUI Id="UI_MyInstallDialog" InstallDirectory="INSTALLFOLDER_INNER" />
 		<UIRef Id="WixUI_ErrorProgressText" />
 
+		<Launch Condition="Installed OR RUSTDESK_SUPPORTED_WINDOWS = &quot;1&quot;" Message="!(loc.LC_OS)" />
+
 		<InstallUISequence>
+			<Custom Action="CheckSupportedWindows" Before="LaunchConditions" Condition="NOT Installed" />
 			<Show Dialog="UI_AnotherAppDialog" Before="WelcomeDlg" Condition="NOT Installed AND (APP_WINDOWS_INSTALLER=&quot;#0&quot; OR APP_WINDOWS_INSTALLER32=&quot;#0&quot;)"/>
 		</InstallUISequence>
 
 		<InstallExecuteSequence>
+			<Custom Action="CheckSupportedWindows" Before="LaunchConditions" Condition="NOT Installed" />
 			<Custom Action="BlockSelfInstalledApp" After="AppSearch" Condition="NOT Installed AND (APP_WINDOWS_INSTALLER=&quot;#0&quot; OR APP_WINDOWS_INSTALLER32=&quot;#0&quot;)" />
 			<InstallExecute After="RemoveExistingProducts" />
 
