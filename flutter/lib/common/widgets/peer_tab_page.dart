@@ -11,6 +11,7 @@ import 'package:flutter_hbb/desktop/widgets/material_mod_popup_menu.dart'
     as mod_menu;
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
+import 'package:flutter_hbb/models/peer_tab_model.dart';
 
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_svg/flutter_svg.dart';

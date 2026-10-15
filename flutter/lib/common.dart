@@ -3921,10 +3921,6 @@ String getConnectionText(bool secure, bool direct, String streamType) {
 
 
 
-bool peerTabShowNote(PeerTabIndex peerTabIndex) {
-  return peerTabIndex == PeerTabIndex.ab || peerTabIndex == PeerTabIndex.group;
-}
-
 // TODO: We should support individual bits combinations in the future.
 // But for now, just keep it simple, because the old code only supports single button.
 // No users have requested multi-button support yet.
