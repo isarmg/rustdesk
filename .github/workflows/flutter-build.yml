@@ -438,7 +438,6 @@ jobs:
             ./SignOutput/rustdesk-*.exe
 
   build-rustdesk-ios:
-    if: ${{ inputs.upload-artifact }}
     name: build rustdesk ios ipa
     runs-on: ${{ matrix.job.os }}
     needs: [generate-bridge]
@@ -462,6 +461,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          brew install nasm
           xcodebuild -version
       - name: Checkout source code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -616,7 +616,7 @@ jobs:
 
       - name: Install build runtime
         run: |
-          brew install llvm create-dmg
+          brew install llvm create-dmg nasm
           # The runner may already provide pkg-config.
           if command -v pkg-config &>/dev/null; then
               echo "pkg-config is already installed"
@@ -1332,8 +1332,8 @@ jobs:
             apt-get remove -y libopus-dev || true
             # output devs
             ls -l ./
-            tree -L 3 /opt/artifacts/vcpkg/installed
           run: |
+            tree -L 3 /opt/artifacts/vcpkg/installed
             # disable git safe.directory
             git config --global --add safe.directory "*"
             # rust
@@ -1593,8 +1593,8 @@ jobs:
             apt-get remove -y libopus-dev || true
             # output devs
             ls -l ./
-            tree -L 3 /opt/artifacts/vcpkg/installed
           run: |
+            tree -L 3 /opt/artifacts/vcpkg/installed
             # disable git safe.directory
             git config --global --add safe.directory "*"
             # rust
