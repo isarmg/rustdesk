@@ -1071,6 +1071,13 @@ pub async fn post_request_sync(url: String, body: String, header: &str) -> Resul
     post_request(url, body, header).await
 }
 
+fn parse_json_header_entries(header: &str) -> ResultType<Map<String, Value>> {
+    match serde_json::from_str(header)? {
+        Value::Object(headers) => Ok(headers),
+        _ => Err(anyhow!("HTTP header information parsing failed!")),
+    }
+}
+
 #[async_recursion]
 async fn get_http_response_async(
     url: &str,
@@ -1094,8 +1101,8 @@ async fn get_http_response_async(
         "delete" => http_client.delete(url),
         _ => return Err(anyhow!("The HTTP request method is not supported!")),
     };
-    for entry in parse_json_header_entries(header)? {
-        http_client = http_client.header(entry.name, entry.value);
+    for (name, value) in parse_json_header_entries(header)? {
+        http_client = http_client.header(name, value.as_str().unwrap_or_default());
     }
 
     if tls_type.is_some() && danger_accept_invalid_cert.is_some() {
@@ -1740,6 +1747,25 @@ mod tests {
         time::{interval, interval_at, sleep, Duration, Instant, Interval},
     };
     use std::collections::HashSet;
+
+    #[test]
+    fn json_http_headers_preserve_custom_headers_and_accept_empty_objects() {
+        let headers = parse_json_header_entries(
+            r#"{"Content-Type":"text/plain","Authorization":"Bearer token"}"#,
+        )
+        .unwrap();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers["Content-Type"], "text/plain");
+        assert_eq!(headers["Authorization"], "Bearer token");
+        assert!(parse_json_header_entries("{}").unwrap().is_empty());
+    }
+
+    #[test]
+    fn json_http_headers_reject_malformed_json_and_non_objects() {
+        for header in ["", "{", "[]", "null", "1", r#""header""#] {
+            assert!(parse_json_header_entries(header).is_err(), "{header:?}");
+        }
+    }
 
     #[test]
     fn update_checks_require_an_explicit_https_endpoint() {

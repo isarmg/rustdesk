@@ -67,7 +67,6 @@ arm64-v8a)
 	FLUTTER_TARGET=android-arm64
 	NDK_TARGET=aarch64-linux-android
 	RUST_TARGET=aarch64-linux-android
-	RUSTDESK_FEATURES='flutter,mediacodec'
 	;;
 *)
 	echo "ERROR: Unsupported Android ABI '${ANDROID_ABI}'!" >&2
@@ -402,14 +401,7 @@ build)
 
 	# Build rustdesk lib
 
-	cargo ndk \
-		--platform 29 \
-		--target "${RUST_TARGET}" \
-		--bindgen \
-		build \
-		--locked \
-		--release \
-		--features "${RUSTDESK_FEATURES}"
+	bash flutter/ndk_arm64.sh
 
 	mkdir -p "flutter/android/app/src/main/jniLibs/${ANDROID_ABI}"
 

@@ -604,9 +604,9 @@ fn release_remote_non_modifiers(
         .map(|(key, event)| (*key, event.clone()))
         .collect();
     let mode = get_keyboard_mode_enum(keyboard_mode);
-    for (key, mut event) in held {
+    for (key, (mut event, lock_modes)) in held {
         event.event_type = rdev::EventType::KeyRelease(key);
-        for key_event in event_to_key_events(peer.to_owned(), &event, mode, None) {
+        for key_event in event_to_key_events(peer.to_owned(), &event, mode, lock_modes) {
             send(&key_event);
         }
     }
@@ -633,7 +633,7 @@ fn release_remote_keys(
         .filter(|(key, _)| is_modifier(key))
         .map(|(key, event)| (*key, event.clone()))
         .collect();
-    let held: Vec<(Key, rdev::Event)> = {
+    let held: Vec<_> = {
         let state = MODIFIERS_STATE.lock().unwrap();
         to_release
             .iter()
@@ -652,9 +652,9 @@ fn release_remote_keys(
     if neutralize_menu {
         send_windows_menu_ctrl(true, swap_ctrl_cmd, send);
     }
-    for (key, mut event) in to_release {
+    for (key, (mut event, lock_modes)) in to_release {
         event.event_type = EventType::KeyRelease(key);
-        for key_event in event_to_key_events(peer.to_owned(), &event, mode, None) {
+        for key_event in event_to_key_events(peer.to_owned(), &event, mode, lock_modes) {
             send(&key_event);
         }
     }
@@ -668,7 +668,7 @@ fn release_remote_keys(
         }
     }
     RELEASED_MODIFIERS.lock().unwrap().insert(
-        *session_id, held.iter().cloned().collect()
+        *session_id, held.iter().map(|(key, (event, _))| (*key, event.clone())).collect()
     );
     // Focus-loss cleanup must still reset modifiers released outside the grab.
     TO_RELEASE.lock().unwrap().extend(held);
@@ -1231,6 +1231,36 @@ mod tests {
                 .filter(|(key, _)| *key == Key::KeyW).map(|(_, down)| *down).collect();
             assert_eq!(w_events, if keep_held { vec![] } else { vec![false] }, "{action}");
         }
+    }
+
+    #[cfg(all(feature = "flutter", not(any(target_os = "android", target_os = "ios"))))]
+    #[test]
+    fn shortcut_cleanup_releases_paired_keypad_navigation() {
+        use base::message_proto::{ControlKey, KeyboardMode};
+        use rdev::Key;
+
+        let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let chord = enable_defaults_and_hold_chord();
+        release_chord(chord);
+        let press = make_press(Key::Kp1);
+        let down = super::super::event_to_key_events(
+            "windows".into(), &press, KeyboardMode::Legacy, Some(0),
+        );
+        // NumLock changes while held; cleanup must still release End, not Kp1.
+        super::super::event_to_key_events(
+            "windows".into(), &press, KeyboardMode::Legacy, Some(4),
+        );
+        let sent = std::cell::RefCell::new(Vec::new());
+        release_remote_non_modifiers("legacy", "windows", &|event| {
+            sent.borrow_mut().push(event.clone());
+        });
+        let up = sent.into_inner();
+        assert_eq!(down.len(), 1);
+        assert_eq!(up.len(), 1);
+        assert_eq!(down[0].control_key(), ControlKey::End);
+        assert_eq!(up[0].control_key(), down[0].control_key());
+        assert!(down[0].down);
+        assert!(!up[0].down);
     }
 
     #[cfg(feature = "flutter")]
