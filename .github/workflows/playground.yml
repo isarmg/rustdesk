@@ -277,7 +277,6 @@ jobs:
                libxcb-randr0-dev \
                libxcb-shape0-dev \
                libxcb-xfixes0-dev \
-               libxdo-dev \
                libxfixes-dev \
                llvm-dev \
                nasm \
