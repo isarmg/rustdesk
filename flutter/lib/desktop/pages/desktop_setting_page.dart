@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
@@ -16,7 +14,6 @@ import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'package:flutter_hbb/mobile/widgets/dialog.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
-import 'package:flutter_hbb/models/printer_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
 import 'package:flutter_hbb/models/shortcut_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -26,7 +23,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../common/widgets/dialog.dart';
-import '../../common/widgets/login.dart';
 
 const double _kTabWidth = 200;
 const double _kTabHeight = 42;
@@ -56,8 +52,6 @@ enum SettingsTabKey {
   safety,
   network,
   display,
-  account,
-  printer,
   about,
 }
 
@@ -75,11 +69,6 @@ class DesktopSettingPage extends StatefulWidget {
         bind.mainGetBuildinOption(key: kOptionHideNetworkSetting) != 'Y')
       SettingsTabKey.network,
     if (!bind.isIncomingOnly()) SettingsTabKey.display,
-    if (!bind.isDisableAccount()) SettingsTabKey.account,
-    if (isWindows &&
-        !bind.isDisableSettings() &&
-        bind.mainGetBuildinOption(key: kOptionHideRemotePrinterSetting) != 'Y')
-      SettingsTabKey.printer,
     SettingsTabKey.about,
   ];
 
@@ -203,14 +192,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           settingTabs.add(_TabInfo(tab, 'Display',
               Icons.desktop_windows_outlined, Icons.desktop_windows));
           break;
-        case SettingsTabKey.account:
-          settingTabs.add(
-              _TabInfo(tab, 'Account', Icons.person_outline, Icons.person));
-          break;
-        case SettingsTabKey.printer:
-          settingTabs
-              .add(_TabInfo(tab, 'Printer', Icons.print_outlined, Icons.print));
-          break;
+
         case SettingsTabKey.about:
           settingTabs
               .add(_TabInfo(tab, 'About', Icons.info_outline, Icons.info));
@@ -236,12 +218,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         case SettingsTabKey.display:
           children.add(const _Display());
           break;
-        case SettingsTabKey.account:
-          children.add(const _Account());
-          break;
-        case SettingsTabKey.printer:
-          children.add(const _Printer());
-          break;
+
         case SettingsTabKey.about:
           children.add(const _About());
           break;
@@ -420,7 +397,6 @@ class _GeneralState extends State<_General> {
         _Card(title: 'Language', children: [language()]),
         if (!isWeb) hwcodec(),
         if (!isWeb) audio(context),
-        if (!isWeb) record(context),
         if (!isWeb) WaylandCard(),
         other(),
         if (!bind.isIncomingOnly()) keyboardShortcuts(),
@@ -551,15 +527,6 @@ class _GeneralState extends State<_General> {
           kOptionOpenNewConnInTabs,
           isServer: false,
         ),
-        Tooltip(
-          message: translate('port-forward-mux-tip'),
-          child: _OptionCheckBox(
-            context,
-            'Reuse one connection for port forwarding',
-            kOptionEnablePortForwardMux,
-            isServer: false,
-          ),
-        ),
         // though this is related to GUI, but opengl problem affects all users, so put in config rather than local
         if (isLinux)
           Tooltip(
@@ -656,21 +623,6 @@ class _GeneralState extends State<_General> {
       ));
     }
 
-    if (!bind.isDisableAccount()) {
-      children.add(_OptionCheckBox(
-        context,
-        'note-at-conn-end-tip',
-        kOptionAllowAskForNoteAtEndOfConnection,
-        isServer: false,
-        optSetter: (key, value) async {
-          if (value && !gFFI.userModel.isLogin) {
-            final res = await loginDialog();
-            if (res != true) return;
-          }
-          await mainSetLocalBoolOption(key, value);
-        },
-      ));
-    }
     children.add(_OptionCheckBox(
       context,
       'Show monitor switch button on the main toolbar',
@@ -792,104 +744,7 @@ class _GeneralState extends State<_General> {
       return _Card(title: 'Audio Input Device', children: [child]);
     }
 
-    return AudioInput(builder: builder, isCm: false, isVoiceCall: false);
-  }
-
-  Widget record(BuildContext context) {
-    final showRootDir = isWindows && bind.mainIsInstalled();
-    return futureBuilder(future: () async {
-      String user_dir = bind.mainVideoSaveDirectory(root: false);
-      String root_dir =
-          showRootDir ? bind.mainVideoSaveDirectory(root: true) : '';
-      bool user_dir_exists = await Directory(user_dir).exists();
-      bool root_dir_exists =
-          showRootDir ? await Directory(root_dir).exists() : false;
-      return {
-        'user_dir': user_dir,
-        'root_dir': root_dir,
-        'user_dir_exists': user_dir_exists,
-        'root_dir_exists': root_dir_exists,
-      };
-    }(), hasData: (data) {
-      Map<String, dynamic> map = data as Map<String, dynamic>;
-      String user_dir = map['user_dir']!;
-      String root_dir = map['root_dir']!;
-      bool root_dir_exists = map['root_dir_exists']!;
-      bool user_dir_exists = map['user_dir_exists']!;
-      return _Card(title: 'Recording', children: [
-        if (!bind.isOutgoingOnly())
-          _OptionCheckBox(context, 'Automatically record incoming sessions',
-              kOptionAllowAutoRecordIncoming),
-        if (!bind.isIncomingOnly())
-          _OptionCheckBox(context, 'Automatically record outgoing sessions',
-              kOptionAllowAutoRecordOutgoing,
-              isServer: false),
-        if (showRootDir && !bind.isOutgoingOnly())
-          Row(
-            children: [
-              Text(
-                  '${translate(bind.isIncomingOnly() ? "Directory" : "Incoming")}:'),
-              Expanded(
-                child: GestureDetector(
-                    onTap: root_dir_exists
-                        ? () => launchUrl(Uri.file(root_dir))
-                        : null,
-                    child: Text(
-                      root_dir,
-                      softWrap: true,
-                      style: root_dir_exists
-                          ? const TextStyle(
-                              decoration: TextDecoration.underline)
-                          : null,
-                    )).marginOnly(left: 10),
-              ),
-            ],
-          ).marginOnly(left: _kContentHMargin),
-        if (!(showRootDir && bind.isIncomingOnly()))
-          Row(
-            children: [
-              Text(
-                  '${translate((showRootDir && !bind.isOutgoingOnly()) ? "Outgoing" : "Directory")}:'),
-              Expanded(
-                child: GestureDetector(
-                    onTap: user_dir_exists
-                        ? () => launchUrl(Uri.file(user_dir))
-                        : null,
-                    child: Text(
-                      user_dir,
-                      softWrap: true,
-                      style: user_dir_exists
-                          ? const TextStyle(
-                              decoration: TextDecoration.underline)
-                          : null,
-                    )).marginOnly(left: 10),
-              ),
-              ElevatedButton(
-                      onPressed: isOptionFixed(kOptionVideoSaveDirectory)
-                          ? null
-                          : () async {
-                              String? initialDirectory;
-                              if (await Directory.fromUri(
-                                      Uri.directory(user_dir))
-                                  .exists()) {
-                                initialDirectory = user_dir;
-                              }
-                              String? selectedDirectory =
-                                  await FilePicker.platform.getDirectoryPath(
-                                      initialDirectory: initialDirectory);
-                              if (selectedDirectory != null) {
-                                await bind.mainSetLocalOption(
-                                    key: kOptionVideoSaveDirectory,
-                                    value: selectedDirectory);
-                                setState(() {});
-                              }
-                            },
-                      child: Text(translate('Change')))
-                  .marginOnly(left: 5),
-            ],
-          ).marginOnly(left: _kContentHMargin),
-      ]);
-    });
+    return AudioInput(builder: builder, isCm: false);
   }
 
   Widget language() {
@@ -1231,28 +1086,12 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 context, 'Enable keyboard/mouse', kOptionEnableKeyboard,
                 enabled: enabled, fakeValue: fakeValue),
             if (isWindows)
-              _OptionCheckBox(
-                  context, 'Enable remote printer', kOptionEnableRemotePrinter,
-                  enabled: enabled, fakeValue: fakeValue),
-            _OptionCheckBox(context, 'Enable clipboard', kOptionEnableClipboard,
-                enabled: enabled, fakeValue: fakeValue),
-            _OptionCheckBox(
-                context, 'Enable file transfer', kOptionEnableFileTransfer,
+              _OptionCheckBox(context, 'Enable clipboard', kOptionEnableClipboard,
                 enabled: enabled, fakeValue: fakeValue),
             _OptionCheckBox(context, 'Enable audio', kOptionEnableAudio,
                 enabled: enabled, fakeValue: fakeValue),
-            _OptionCheckBox(context, 'Enable camera', kOptionEnableCamera,
-                enabled: enabled, fakeValue: fakeValue),
-            _OptionCheckBox(context, 'Enable terminal', kOptionEnableTerminal,
-                enabled: enabled, fakeValue: fakeValue),
-            _OptionCheckBox(
-                context, 'Enable TCP tunneling', kOptionEnableTunnel,
-                enabled: enabled, fakeValue: fakeValue),
             _OptionCheckBox(
                 context, 'Enable remote restart', kOptionEnableRemoteRestart,
-                enabled: enabled, fakeValue: fakeValue),
-            _OptionCheckBox(
-                context, 'Enable recording session', kOptionEnableRecordSession,
                 enabled: enabled, fakeValue: fakeValue),
             if (isWindows)
               _OptionCheckBox(context, 'Enable blocking user input',
@@ -1433,7 +1272,6 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   Widget more(BuildContext context) {
     bool enabled = !locked;
     return _Card(title: 'Security', children: [
-      shareRdp(context, enabled),
       _OptionCheckBox(context, 'Deny LAN discovery', 'enable-lan-discovery',
           reverse: true, enabled: enabled),
       ...directIp(context),
@@ -1449,33 +1287,6 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
             reverse: false, enabled: enabled),
       if (bind.mainIsInstalled() && !isUnlockPinDisabled()) unlockPin()
     ]);
-  }
-
-  shareRdp(BuildContext context, bool enabled) {
-    onChanged(bool b) async {
-      await bind.mainSetShareRdp(enable: b);
-      setState(() {});
-    }
-
-    bool value = bind.mainIsShareRdp();
-    return Offstage(
-      offstage: !(isWindows && bind.mainIsInstalled()),
-      child: GestureDetector(
-          child: Row(
-            children: [
-              Checkbox(
-                      value: value,
-                      onChanged: enabled ? (_) => onChanged(!value) : null)
-                  .marginOnly(right: 5),
-              Expanded(
-                child: Text(translate('Enable RDP session sharing'),
-                    style:
-                        TextStyle(color: disabledTextColor(context, enabled))),
-              )
-            ],
-          ).marginOnly(left: _kCheckBoxLeftMargin),
-          onTap: enabled ? () => onChanged(!value) : null),
-    );
   }
 
   List<Widget> directIp(BuildContext context) {
@@ -2223,7 +2034,7 @@ class _DisplayState extends State<_Display> {
     onChanged(bool b) async {
       await setOtherDefaultSettingOption(
         key,
-        b ? 'Y' : (key == kOptionEnableFileCopyPaste ? 'N' : defaultOptionNo),
+        b ? 'Y' : defaultOptionNo,
       );
       setState(() {});
     }
@@ -2247,99 +2058,6 @@ class _DisplayState extends State<_Display> {
     final children =
         otherDefaultSettings().map((e) => otherRow(e.$1, e.$2)).toList();
     return _Card(title: 'Other Default Options', children: children);
-  }
-}
-
-class _Account extends StatefulWidget {
-  const _Account({Key? key}) : super(key: key);
-
-  @override
-  State<_Account> createState() => _AccountState();
-}
-
-class _AccountState extends State<_Account> {
-  @override
-  Widget build(BuildContext context) {
-    final scrollController = ScrollController();
-    return ListView(
-      controller: scrollController,
-      children: [
-        _Card(title: 'Account', children: [accountAction(), useInfo()]),
-      ],
-    ).marginOnly(bottom: _kListViewBottomMargin);
-  }
-
-  Widget accountAction() {
-    return Obx(() => _Button(
-        gFFI.userModel.userName.value.isEmpty
-            ? 'Login'
-            : '${translate('Logout')} (${gFFI.userModel.accountLabelWithHandle})',
-        () => {
-              gFFI.userModel.userName.value.isEmpty
-                  ? loginDialog()
-                  : logOutConfirmDialog()
-            }));
-  }
-
-  Widget useInfo() {
-    return Obx(() => Offstage(
-          offstage: gFFI.userModel.userName.value.isEmpty,
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Builder(builder: (context) {
-              final avatarWidget = _buildUserAvatar();
-              return Row(
-                children: [
-                  if (avatarWidget != null) avatarWidget,
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          gFFI.userModel.displayNameOrUserName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        SelectionArea(
-                          child: Text(
-                            '@${gFFI.userModel.userName.value}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color:
-                                  Theme.of(context).textTheme.bodySmall?.color,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            }),
-          ),
-        )).marginOnly(left: 18, top: 16);
-  }
-
-  Widget? _buildUserAvatar() {
-    // Resolve relative avatar path at display time
-    final avatar =
-        bind.mainResolveAvatarUrl(avatar: gFFI.userModel.avatar.value);
-    return buildAvatarWidget(
-      avatar: avatar,
-      size: 44,
-    );
   }
 }
 
@@ -2391,153 +2109,6 @@ class _CheckboxState extends State<_Checkbox> {
       ).marginOnly(left: _kCheckBoxLeftMargin),
       onTap: () => onChanged(!value),
     );
-  }
-}
-
-class _Printer extends StatefulWidget {
-  const _Printer({super.key});
-
-  @override
-  State<_Printer> createState() => __PrinterState();
-}
-
-class __PrinterState extends State<_Printer> {
-  @override
-  Widget build(BuildContext context) {
-    final scrollController = ScrollController();
-    return ListView(controller: scrollController, children: [
-      outgoing(context),
-      incoming(context),
-    ]).marginOnly(bottom: _kListViewBottomMargin);
-  }
-
-  Widget outgoing(BuildContext context) {
-    final isSupportPrinterDriver =
-        bind.mainGetCommonSync(key: 'is-support-printer-driver') == 'true';
-
-    Widget tipOsNotSupported() {
-      return Align(
-        alignment: Alignment.topLeft,
-        child: Text(translate('printer-os-requirement-tip')),
-      ).marginOnly(left: _kCardLeftMargin);
-    }
-
-    Widget tipClientNotInstalled() {
-      return Align(
-        alignment: Alignment.topLeft,
-        child:
-            Text(translate('printer-requires-installed-{$appName}-client-tip')),
-      ).marginOnly(left: _kCardLeftMargin);
-    }
-
-    Widget tipPrinterNotInstalled() {
-      final failedMsg = ''.obs;
-      platformFFI.registerEventHandler(
-          'install-printer-res', 'install-printer-res', (evt) async {
-        if (evt['success'] as bool) {
-          setState(() {});
-        } else {
-          failedMsg.value = evt['msg'] as String;
-        }
-      }, replace: true);
-      return Column(children: [
-        Obx(
-          () => failedMsg.value.isNotEmpty
-              ? Offstage()
-              : Align(
-                  alignment: Alignment.topLeft,
-                  child: Text(translate('printer-{$appName}-not-installed-tip'))
-                      .marginOnly(bottom: 10.0),
-                ),
-        ),
-        Obx(
-          () => failedMsg.value.isEmpty
-              ? Offstage()
-              : Align(
-                  alignment: Alignment.topLeft,
-                  child: Text(failedMsg.value,
-                          style: DefaultTextStyle.of(context)
-                              .style
-                              .copyWith(color: Colors.red))
-                      .marginOnly(bottom: 10.0)),
-        ),
-        _Button('Install {$appName} Printer', () {
-          failedMsg.value = '';
-          bind.mainSetCommon(key: 'install-printer', value: '');
-        })
-      ]).marginOnly(left: _kCardLeftMargin, bottom: 2.0);
-    }
-
-    Widget tipReady() {
-      return Align(
-        alignment: Alignment.topLeft,
-        child: Text(translate('printer-{$appName}-ready-tip')),
-      ).marginOnly(left: _kCardLeftMargin);
-    }
-
-    final installed = bind.mainIsInstalled();
-    // `is-printer-installed` may fail, but it's rare case.
-    // Add additional error message here if it's really needed.
-    final isPrinterInstalled =
-        bind.mainGetCommonSync(key: 'is-printer-installed') == 'true';
-
-    final List<Widget> children = [];
-    if (!isSupportPrinterDriver) {
-      children.add(tipOsNotSupported());
-    } else {
-      children.addAll([
-        if (!installed) tipClientNotInstalled(),
-        if (installed && !isPrinterInstalled) tipPrinterNotInstalled(),
-        if (installed && isPrinterInstalled) tipReady()
-      ]);
-    }
-    return _Card(title: 'Outgoing Print Jobs', children: children);
-  }
-
-  Widget incoming(BuildContext context) {
-    onRadioChanged(String value) async {
-      await bind.mainSetLocalOption(
-          key: kKeyPrinterIncomingJobAction, value: value);
-      setState(() {});
-    }
-
-    PrinterOptions printerOptions = PrinterOptions.load();
-    return _Card(title: 'Incoming Print Jobs', children: [
-      _Radio(context,
-          value: kValuePrinterIncomingJobDismiss,
-          groupValue: printerOptions.action,
-          label: 'Dismiss',
-          onChanged: onRadioChanged),
-      _Radio(context,
-          value: kValuePrinterIncomingJobDefault,
-          groupValue: printerOptions.action,
-          label: 'use-the-default-printer-tip',
-          onChanged: onRadioChanged),
-      _Radio(context,
-          value: kValuePrinterIncomingJobSelected,
-          groupValue: printerOptions.action,
-          label: 'use-the-selected-printer-tip',
-          onChanged: onRadioChanged),
-      if (printerOptions.printerNames.isNotEmpty)
-        ComboBox(
-          initialKey: printerOptions.printerName,
-          keys: printerOptions.printerNames,
-          values: printerOptions.printerNames,
-          enabled: printerOptions.action == kValuePrinterIncomingJobSelected,
-          onChanged: (value) async {
-            await bind.mainSetLocalOption(
-                key: kKeyPrinterSelected, value: value);
-            setState(() {});
-          },
-        ).marginOnly(left: 10),
-      _OptionCheckBox(
-        context,
-        'auto-print-tip',
-        kKeyPrinterAllowAutoPrint,
-        isServer: false,
-        enabled: printerOptions.action != kValuePrinterIncomingJobDismiss,
-      )
-    ]);
   }
 }
 

@@ -13,11 +13,9 @@ import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
-import '../../common/widgets/login.dart';
 import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
-import '../widgets/deploy_dialog.dart';
 import '../../models/shortcut_model.dart';
 import '../widgets/dialog.dart';
 import 'home_page.dart';
@@ -74,7 +72,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   var _ignoreBatteryOpt = false;
   var _enableStartOnBoot = false;
   var _checkUpdateOnStartup = false;
-  var _showTerminalExtraKeys = false;
   var _floatingWindowDisabled = false;
   var _keepScreenOn = KeepScreenOn.duringControlled; // relay on floating window
   var _enableAbr = false;
@@ -82,11 +79,8 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   var _onlyWhiteList = false;
   var _onlyIdWhiteList = false;
   var _enableDirectIPAccess = false;
-  var _enableRecordSession = false;
   var _enableHardwareCodec = false;
   var _allowWebSocket = false;
-  var _autoRecordIncomingSession = false;
-  var _autoRecordOutgoingSession = false;
   var _allowAutoDisconnect = false;
   var _localIP = "";
   var _directAccessPort = "";
@@ -106,7 +100,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   var _enableIpv6Punch = false;
   var _enableWebrtc = false;
   var _isUsingPublicServer = false;
-  var _allowAskForNoteAtEndOfConnection = false;
   var _preventSleepWhileConnected = true;
 
   _SettingsState() {
@@ -118,18 +111,12 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     _onlyIdWhiteList = idWhitelistNotEmpty();
     _enableDirectIPAccess = option2bool(
         kOptionDirectServer, bind.mainGetOptionSync(key: kOptionDirectServer));
-    _enableRecordSession = option2bool(kOptionEnableRecordSession,
-        bind.mainGetOptionSync(key: kOptionEnableRecordSession));
     _enableHardwareCodec = option2bool(kOptionEnableHwcodec,
         bind.mainGetOptionSync(key: kOptionEnableHwcodec));
     _allowWebSocket = mainGetBoolOptionSync(kOptionAllowWebSocket);
     _allowInsecureTlsFallback =
         mainGetBoolOptionSync(kOptionAllowInsecureTLSFallback);
     _disableUdp = bind.mainGetOptionSync(key: kOptionDisableUdp) == 'Y';
-    _autoRecordIncomingSession = option2bool(kOptionAllowAutoRecordIncoming,
-        bind.mainGetOptionSync(key: kOptionAllowAutoRecordIncoming));
-    _autoRecordOutgoingSession = option2bool(kOptionAllowAutoRecordOutgoing,
-        bind.mainGetLocalOption(key: kOptionAllowAutoRecordOutgoing));
     _localIP = bind.mainGetOptionSync(key: 'local-ip-addr');
     _directAccessPort = bind.mainGetOptionSync(key: kOptionDirectAccessPort);
     _allowAutoDisconnect = option2bool(kOptionAllowAutoDisconnect,
@@ -149,12 +136,8 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     _enableUdpPunch = mainGetLocalBoolOptionSync(kOptionEnableUdpPunch);
     _enableIpv6Punch = mainGetLocalBoolOptionSync(kOptionEnableIpv6Punch);
     _enableWebrtc = mainGetLocalBoolOptionSync(kOptionEnableWebrtc);
-    _allowAskForNoteAtEndOfConnection =
-        mainGetLocalBoolOptionSync(kOptionAllowAskForNoteAtEndOfConnection);
     _preventSleepWhileConnected =
         mainGetLocalBoolOptionSync(kOptionKeepAwakeDuringOutgoingSessions);
-    _showTerminalExtraKeys =
-        mainGetLocalBoolOptionSync(kOptionEnableShowTerminalExtraKeys);
   }
 
   @override
@@ -451,20 +434,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 });
               },
       ),
-      SettingsTile.switchTile(
-        title: Text(translate('Enable recording session')),
-        initialValue: _enableRecordSession,
-        onToggle: isOptionFixed(kOptionEnableRecordSession)
-            ? null
-            : (v) async {
-                await mainSetBoolOption(kOptionEnableRecordSession, v);
-                final newValue =
-                    await mainGetBoolOption(kOptionEnableRecordSession);
-                setState(() {
-                  _enableRecordSession = newValue;
-                });
-              },
-      ),
+
       SettingsTile.switchTile(
         title: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -647,22 +617,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       );
     }
 
-    enhancementsTiles.add(
-      SettingsTile.switchTile(
-        initialValue: _showTerminalExtraKeys,
-        title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(translate('Show terminal extra keys')),
-        ]),
-        onToggle: (bool v) async {
-          await mainSetLocalBoolOption(kOptionEnableShowTerminalExtraKeys, v);
-          final newValue =
-              mainGetLocalBoolOptionSync(kOptionEnableShowTerminalExtraKeys);
-          setState(() {
-            _showTerminalExtraKeys = newValue;
-          });
-        },
-      ),
-    );
+
 
     onFloatingWindowChanged(bool toValue) async {
       if (toValue) {
@@ -720,35 +675,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     final settings = SettingsList(
       sections: [
         customClientSection,
-        if (!bind.isDisableAccount())
-          SettingsSection(
-            title: Text(translate('Account')),
-            tiles: [
-              SettingsTile(
-                title: Obx(() => Text(gFFI.userModel.userName.value.isEmpty
-                    ? translate('Login')
-                    : '${translate('Logout')} (${gFFI.userModel.accountLabelWithHandle})')),
-                leading: Obx(() {
-                  final avatar = bind.mainResolveAvatarUrl(
-                      avatar: gFFI.userModel.avatar.value);
-                  return buildAvatarWidget(
-                        avatar: avatar,
-                        size: 28,
-                        borderRadius: null,
-                        fallback: Icon(Icons.person),
-                      ) ??
-                      Icon(Icons.person);
-                }),
-                onPressed: (context) {
-                  if (gFFI.userModel.userName.value.isEmpty) {
-                    loginDialog();
-                  } else {
-                    logOutConfirmDialog();
-                  }
-                },
-              ),
-            ],
-          ),
         SettingsSection(title: Text(translate("Settings")), tiles: [
           if (!disabledSettings && !_hideNetwork && !_hideServer)
             SettingsTile(
@@ -766,13 +692,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 leading: Icon(Icons.network_ping),
                 onPressed: (context) {
                   changeSocks5Proxy();
-                }),
-          if (isAndroid && !bind.isOutgoingOnly())
-            SettingsTile(
-                title: Text(translate('Deploy')),
-                leading: Icon(Icons.cloud_upload),
-                onPressed: (context) {
-                  showDeployDialog();
                 }),
           if (!disabledSettings && !_hideNetwork && !_hideWebSocket)
             SettingsTile.switchTile(
@@ -917,24 +836,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 });
               },
             ),
-          if (!bind.isDisableAccount())
-            SettingsTile.switchTile(
-              title: Text(translate('note-at-conn-end-tip')),
-              initialValue: _allowAskForNoteAtEndOfConnection,
-              onToggle: (v) async {
-                if (v && !gFFI.userModel.isLogin) {
-                  final res = await loginDialog();
-                  if (res != true) return;
-                }
-                await mainSetLocalBoolOption(
-                    kOptionAllowAskForNoteAtEndOfConnection, v);
-                final newValue = mainGetLocalBoolOptionSync(
-                    kOptionAllowAskForNoteAtEndOfConnection);
-                setState(() {
-                  _allowAskForNoteAtEndOfConnection = newValue;
-                });
-              },
-            ),
           if (!incomingOnly)
             SettingsTile.switchTile(
               title:
@@ -966,58 +867,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                     },
             ),
           ]),
-        if (isAndroid)
-          SettingsSection(
-            title: Text(translate("Recording")),
-            tiles: [
-              if (!outgoingOnly)
-                SettingsTile.switchTile(
-                  title:
-                      Text(translate('Automatically record incoming sessions')),
-                  initialValue: _autoRecordIncomingSession,
-                  onToggle: isOptionFixed(kOptionAllowAutoRecordIncoming)
-                      ? null
-                      : (v) async {
-                          await bind.mainSetOption(
-                              key: kOptionAllowAutoRecordIncoming,
-                              value: bool2option(
-                                  kOptionAllowAutoRecordIncoming, v));
-                          final newValue = option2bool(
-                              kOptionAllowAutoRecordIncoming,
-                              await bind.mainGetOption(
-                                  key: kOptionAllowAutoRecordIncoming));
-                          setState(() {
-                            _autoRecordIncomingSession = newValue;
-                          });
-                        },
-                ),
-              if (!incomingOnly)
-                SettingsTile.switchTile(
-                  title:
-                      Text(translate('Automatically record outgoing sessions')),
-                  initialValue: _autoRecordOutgoingSession,
-                  onToggle: isOptionFixed(kOptionAllowAutoRecordOutgoing)
-                      ? null
-                      : (v) async {
-                          await bind.mainSetLocalOption(
-                              key: kOptionAllowAutoRecordOutgoing,
-                              value: bool2option(
-                                  kOptionAllowAutoRecordOutgoing, v));
-                          final newValue = option2bool(
-                              kOptionAllowAutoRecordOutgoing,
-                              bind.mainGetLocalOption(
-                                  key: kOptionAllowAutoRecordOutgoing));
-                          setState(() {
-                            _autoRecordOutgoingSession = newValue;
-                          });
-                        },
-                ),
-              SettingsTile(
-                title: Text(translate("Directory")),
-                description: Text(bind.mainVideoSaveDirectory(root: false)),
-              ),
-            ],
-          ),
         if (isAndroid &&
             !disabledSettings &&
             !outgoingOnly &&

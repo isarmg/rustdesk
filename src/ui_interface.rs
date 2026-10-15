@@ -5,7 +5,6 @@ use hbb_common::{
     allow_err,
     bytes::Bytes,
     config::{self, Config, LocalConfig, PeerConfig, CONNECT_TIMEOUT, RENDEZVOUS_PORT},
-    directories_next,
     futures::future::join_all,
     log,
     rendezvous_proto::*,
@@ -25,8 +24,6 @@ use std::{
 };
 
 use crate::common::SOFTWARE_UPDATE_URL;
-#[cfg(feature = "flutter")]
-use crate::hbbs_http::account;
 #[cfg(not(any(target_os = "ios")))]
 use crate::ipc;
 
@@ -68,7 +65,6 @@ lazy_static::lazy_static! {
         video_conn_count: 0,
     }));
     static ref ASYNC_JOB_STATUS : Arc<Mutex<String>> = Default::default();
-    static ref ASYNC_HTTP_STATUS : Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
     static ref TEMPORARY_PASSWD : Arc<Mutex<String>> = Arc::new(Mutex::new("".to_owned()));
     static ref IS_REMOTE_MODIFY_ENABLED_BY_CONTROL_PERMISSIONS : Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
 }
@@ -81,10 +77,7 @@ lazy_static::lazy_static! {
     static ref CHILDREN : Children = Default::default();
 }
 
-#[cfg(target_os = "windows")]
-lazy_static::lazy_static! {
-    pub static ref IS_FILE_TRANSFER_ENABLED: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
-}
+
 
 const INIT_ASYNC_JOB_STATUS: &str = " ";
 
@@ -247,19 +240,6 @@ pub fn get_builtin_option(key: &str) -> String {
 #[inline]
 pub fn set_local_option(key: String, value: String) {
     LocalConfig::set_option(key.clone(), value);
-}
-
-/// Resolve relative avatar path (e.g. "/avatar/xxx") to absolute URL
-/// by prepending the API server address.
-pub fn resolve_avatar_url(avatar: String) -> String {
-    let avatar = avatar.trim().to_owned();
-    if avatar.starts_with('/') {
-        let api_server = get_api_server();
-        if !api_server.is_empty() {
-            return format!("{}{}", api_server.trim_end_matches('/'), avatar);
-        }
-    }
-    avatar
 }
 
 #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
@@ -548,20 +528,6 @@ pub fn is_installed() -> bool {
 }
 
 #[inline]
-pub fn is_share_rdp() -> bool {
-    #[cfg(windows)]
-    return crate::platform::windows::is_share_rdp();
-    #[cfg(not(windows))]
-    return false;
-}
-
-#[inline]
-pub fn set_share_rdp(_enable: bool) {
-    #[cfg(windows)]
-    crate::platform::windows::set_share_rdp(_enable);
-}
-
-#[inline]
 pub fn is_installed_lower_version() -> bool {
     #[cfg(not(windows))]
     return false;
@@ -718,12 +684,12 @@ pub fn get_error() -> String {
         if crate::platform::linux::DISPLAY_SERVER_WAYLAND == dtype {
             return crate::server::wayland::common_get_error();
         }
-        if dtype != crate::platform::linux::DISPLAY_SERVER_X11 {
+        if dtype != crate::platform::linux::DISPLAY_SERVER_WAYLAND {
             return format!(
                 "{} {}, {}",
                 crate::client::translate("Unsupported display server".to_owned()),
                 dtype,
-                crate::client::translate("x11 expected".to_owned()),
+                "wayland expected",
             );
         }
     }
@@ -856,46 +822,6 @@ pub fn change_id(id: String) {
 }
 
 #[inline]
-pub fn http_request(url: String, method: String, body: Option<String>, header: String) {
-    // Respond to concurrent requests for resources
-    let current_request = ASYNC_HTTP_STATUS.clone();
-    current_request
-        .lock()
-        .unwrap()
-        .insert(url.clone(), " ".to_owned());
-    std::thread::spawn(move || {
-        let res = match crate::http_request_sync(url.clone(), method, body, header) {
-            Err(err) => {
-                log::error!("{}", err);
-                err.to_string()
-            }
-            Ok(text) => text,
-        };
-        current_request.lock().unwrap().insert(url, res);
-    });
-}
-
-#[inline]
-pub fn get_async_http_status(url: String) -> Option<String> {
-    match ASYNC_HTTP_STATUS.lock().unwrap().get(&url) {
-        None => None,
-        Some(_str) => Some(_str.to_string()),
-    }
-}
-
-#[inline]
-#[cfg(not(feature = "flutter"))]
-pub fn post_request(url: String, body: String, header: String) {
-    *ASYNC_JOB_STATUS.lock().unwrap() = " ".to_owned();
-    std::thread::spawn(move || {
-        *ASYNC_JOB_STATUS.lock().unwrap() = match crate::post_request_sync(url, body, &header) {
-            Err(err) => err.to_string(),
-            Ok(text) => text,
-        };
-    });
-}
-
-#[inline]
 pub fn get_async_job_status() -> String {
     ASYNC_JOB_STATUS.lock().unwrap().clone()
 }
@@ -913,242 +839,12 @@ pub fn get_langs() -> String {
     json!(x).to_string()
 }
 
-// Preserve relative paths for existing configurations and only remove accidental
-// surrounding whitespace. Config values are not shell-expanded (for example, `~`).
-fn trim_video_save_directory(value: &str) -> Option<&str> {
-    let value = value.trim();
-    if !value.is_empty() {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-// A Windows service typically runs with System32 as its working directory, so
-// require an absolute path to avoid resolving recordings there unexpectedly.
-#[cfg(any(windows, test))]
-fn validate_windows_service_video_save_directory(value: &str) -> Option<&str> {
-    let value = trim_video_save_directory(value)?;
-    if std::path::Path::new(value).is_absolute() {
-        Some(value)
-    } else {
-        None
-    }
-}
-
-#[inline]
-pub fn video_save_directory(root: bool) -> String {
-    let appname = crate::get_app_name();
-    // ui process can show it correctly Once vidoe process created it.
-    let try_create = |path: &std::path::Path| {
-        if !path.exists() {
-            std::fs::create_dir_all(path).ok();
-        }
-        if path.exists() {
-            path.to_string_lossy().to_string()
-        } else {
-            "".to_string()
-        }
-    };
-
-    if root {
-        // Currently, only installed windows run as root
-        #[cfg(windows)]
-        {
-            let dir = Config::get_option(OPTION_WINDOWS_SERVICE_VIDEO_SAVE_DIRECTORY);
-            if let Some(dir) = validate_windows_service_video_save_directory(&dir) {
-                return dir.to_owned();
-            }
-            if !dir.trim().is_empty() {
-                log::warn!(
-                    "Ignoring {OPTION_WINDOWS_SERVICE_VIDEO_SAVE_DIRECTORY}: path must be absolute"
-                );
-            }
-            let drive = std::env::var("SystemDrive").unwrap_or("C:".to_owned());
-            let dir =
-                std::path::PathBuf::from(format!("{drive}\\ProgramData\\{appname}\\recording",));
-            return dir.to_string_lossy().to_string();
-        }
-    }
-    // Get directory from config file otherwise --server will use the old value from global var.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let dir = LocalConfig::get_option_from_file(OPTION_VIDEO_SAVE_DIRECTORY);
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let dir = LocalConfig::get_option(OPTION_VIDEO_SAVE_DIRECTORY);
-    if let Some(dir) = trim_video_save_directory(&dir) {
-        return dir.to_owned();
-    }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    if let Ok(home) = config::APP_HOME_DIR.read() {
-        let mut path = home.to_owned();
-        path.push_str(format!("/{appname}/ScreenRecord").as_str());
-        let dir = try_create(&std::path::Path::new(&path));
-        if !dir.is_empty() {
-            return dir;
-        }
-    }
-
-    if let Some(user) = directories_next::UserDirs::new() {
-        if let Some(video_dir) = user.video_dir() {
-            let dir = try_create(&video_dir.join(&appname));
-            if !dir.is_empty() {
-                return dir;
-            }
-            if video_dir.exists() {
-                return video_dir.to_string_lossy().to_string();
-            }
-        }
-        if let Some(desktop_dir) = user.desktop_dir() {
-            if desktop_dir.exists() {
-                return desktop_dir.to_string_lossy().to_string();
-            }
-        }
-        let home = user.home_dir();
-        if home.exists() {
-            return home.to_string_lossy().to_string();
-        }
-    }
-
-    // same order as above
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if let Some(home) = crate::platform::get_active_user_home() {
-        let name = if cfg!(target_os = "macos") {
-            "Movies"
-        } else {
-            "Videos"
-        };
-        let video_dir = home.join(name);
-        let dir = try_create(&video_dir.join(&appname));
-        if !dir.is_empty() {
-            return dir;
-        }
-        if video_dir.exists() {
-            return video_dir.to_string_lossy().to_string();
-        }
-        let desktop_dir = home.join("Desktop");
-        if desktop_dir.exists() {
-            return desktop_dir.to_string_lossy().to_string();
-        }
-        if home.exists() {
-            return home.to_string_lossy().to_string();
-        }
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            let dir = try_create(&parent.join("videos"));
-            if !dir.is_empty() {
-                return dir;
-            }
-            // basically exist
-            return parent.to_string_lossy().to_string();
-        }
-    }
-    Default::default()
-}
-
 #[inline]
 pub fn get_api_server() -> String {
     crate::get_api_server(
         get_option("api-server"),
         get_option("custom-rendezvous-server"),
     )
-}
-
-pub enum DeployResult {
-    Ok,
-    NotEnabled,
-    InvalidInput,
-    IdTaken(String),
-    Error(String),
-}
-
-impl DeployResult {
-    pub fn message(&self) -> String {
-        match self {
-            Self::Ok => "".to_owned(),
-            Self::NotEnabled => "The server does not require explicit deployment.".to_owned(),
-            Self::InvalidInput => "Invalid input.".to_owned(),
-            Self::IdTaken(id) => {
-                format!(
-                    "Id `{}` is already used by another machine on the server.",
-                    id
-                )
-            }
-            Self::Error(err) => err.clone(),
-        }
-    }
-}
-
-pub fn deploy_device(token: String, new_id: Option<String>) -> DeployResult {
-    if Config::no_register_device() {
-        return DeployResult::Error("Cannot deploy an unregistrable device!".to_owned());
-    }
-    let token = token.trim();
-    if token.is_empty() {
-        return DeployResult::Error("token is required!".to_owned());
-    }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    let local_id = Config::get_id();
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let local_id = ipc::get_id();
-    let id_to_deploy = new_id.clone().unwrap_or_else(|| local_id.clone());
-    let uuid = crate::encode64(hbb_common::get_uuid());
-    let pk = crate::encode64(Config::get_key_pair().1);
-    let body = serde_json::json!({
-        "id": id_to_deploy,
-        "uuid": uuid,
-        "pk": pk,
-    });
-    let header = "Authorization: Bearer ".to_owned() + token;
-    let url = get_api_server() + "/api/devices/deploy";
-    let text = match crate::post_request_sync(url, body.to_string(), &header) {
-        Ok(text) => text,
-        Err(err) => return DeployResult::Error(format!("Request failed: {}", err)),
-    };
-    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
-    match parsed["result"].as_str().unwrap_or("") {
-        "OK" => {
-            if let Some(new_id) = new_id {
-                if new_id != local_id {
-                    #[cfg(any(target_os = "android", target_os = "ios"))]
-                    {
-                        Config::set_key_confirmed(false);
-                        Config::set_id(&new_id);
-                    }
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    if let Err(err) = ipc::set_config("id", new_id) {
-                        return DeployResult::Error(format!(
-                            "Failed to persist deployed id locally: {}",
-                            err
-                        ));
-                    }
-                }
-            }
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if let Err(err) = ipc::notify_deployed() {
-                log::warn!("Failed to notify deployed state: {}", err);
-            }
-            #[cfg(target_os = "android")]
-            {
-                crate::rendezvous_mediator::NEEDS_DEPLOY
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                crate::rendezvous_mediator::reset_needs_deploy_notification();
-                crate::rendezvous_mediator::RendezvousMediator::restart();
-            }
-            DeployResult::Ok
-        }
-        "NOT_ENABLED" => DeployResult::NotEnabled,
-        "INVALID_INPUT" => DeployResult::InvalidInput,
-        "ID_TAKEN" => DeployResult::IdTaken(id_to_deploy),
-        _ => {
-            if text.is_empty() {
-                DeployResult::Error("Unknown response.".to_owned())
-            } else {
-                DeployResult::Error(text)
-            }
-        }
-    }
 }
 
 #[inline]
@@ -1288,21 +984,6 @@ fn check_connect_status(reconnect: bool) -> mpsc::UnboundedSender<ipc::Data> {
 }
 
 #[cfg(feature = "flutter")]
-pub fn account_auth(op: String, id: String, uuid: String, remember_me: bool) {
-    account::OidcSession::account_auth(get_api_server(), op, id, uuid, remember_me);
-}
-
-#[cfg(feature = "flutter")]
-pub fn account_auth_cancel() {
-    account::OidcSession::auth_cancel();
-}
-
-#[cfg(feature = "flutter")]
-pub fn account_auth_result() -> String {
-    serde_json::to_string(&account::OidcSession::get_result()).unwrap_or_default()
-}
-
-#[cfg(feature = "flutter")]
 pub fn set_user_default_option(key: String, value: String) {
     use hbb_common::config::UserDefaultConfig;
     UserDefaultConfig::load().set(key, value);
@@ -1415,16 +1096,6 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                             Ok(Some(ipc::Data::ControlPermissionsRemoteModify(v))) => {
                                 *IS_REMOTE_MODIFY_ENABLED_BY_CONTROL_PERMISSIONS.lock().unwrap() = v;
                             }
-                            #[cfg(target_os = "windows")]
-                            Ok(Some(ipc::Data::FileTransferEnabledState(v))) => {
-                                if let Some(enabled) = v {
-                                    let mut lock = IS_FILE_TRANSFER_ENABLED.lock().unwrap();
-                                    if *lock != v {
-                                        clipboard::ContextSend::enable(enabled);
-                                        *lock = v;
-                                    }
-                                }
-                            }
                             _ => {}
                         }
                     }
@@ -1439,8 +1110,6 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
                         #[cfg(feature = "flutter")]
                         c.send(&ipc::Data::VideoConnCount(None)).await.ok();
                         c.send(&ipc::Data::ControlPermissionsRemoteModify(None)).await.ok();
-                        #[cfg(target_os = "windows")]
-                        c.send(&ipc::Data::FileTransferEnabledState(None)).await.ok();
                     }
                 }
             }
@@ -1738,33 +1407,4 @@ pub fn is_remote_modify_enabled_by_control_permissions() -> Option<bool> {
     *IS_REMOTE_MODIFY_ENABLED_BY_CONTROL_PERMISSIONS
         .lock()
         .unwrap()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::validate_windows_service_video_save_directory;
-
-    #[test]
-    fn validate_service_video_save_directory() {
-        let absolute = if cfg!(windows) {
-            r"C:\recordings"
-        } else {
-            "/recordings"
-        };
-        let padded = format!("  {absolute}  ");
-
-        assert_eq!(
-            validate_windows_service_video_save_directory(&padded),
-            Some(absolute)
-        );
-        assert_eq!(
-            validate_windows_service_video_save_directory("recordings"),
-            None
-        );
-        assert_eq!(
-            validate_windows_service_video_save_directory(&format!("\"{absolute}\"")),
-            None
-        );
-        assert_eq!(validate_windows_service_video_save_directory("  "), None);
-    }
 }

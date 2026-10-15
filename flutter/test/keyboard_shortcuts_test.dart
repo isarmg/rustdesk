@@ -16,11 +16,9 @@ ShortcutPlatformCapabilities capabilities({
   bool includeToolbarShortcut = true,
   bool includeCloseTabShortcut = true,
   bool includeSwitchSidesShortcut = true,
-  bool includeRecordingShortcut = true,
   bool includeResetCanvasShortcut = true,
   bool includePinToolbarShortcut = true,
   bool includeViewModeShortcut = true,
-  bool includeVoiceCallShortcut = true,
   Set<String> excludedActions = const {},
 }) {
   return ShortcutPlatformCapabilities(
@@ -31,11 +29,9 @@ ShortcutPlatformCapabilities capabilities({
     includeToolbarShortcut: includeToolbarShortcut,
     includeCloseTabShortcut: includeCloseTabShortcut,
     includeSwitchSidesShortcut: includeSwitchSidesShortcut,
-    includeRecordingShortcut: includeRecordingShortcut,
     includeResetCanvasShortcut: includeResetCanvasShortcut,
     includePinToolbarShortcut: includePinToolbarShortcut,
     includeViewModeShortcut: includeViewModeShortcut,
-    includeVoiceCallShortcut: includeVoiceCallShortcut,
     excludedActions: excludedActions,
   );
 }
@@ -197,11 +193,9 @@ void main() {
         includeToolbarShortcut: false,
         includeCloseTabShortcut: false,
         includeSwitchSidesShortcut: false,
-        includeRecordingShortcut: false,
         includeResetCanvasShortcut: false,
         includePinToolbarShortcut: false,
         includeViewModeShortcut: false,
-        includeVoiceCallShortcut: false,
       ),
     );
 
@@ -224,13 +218,10 @@ void main() {
         includeToolbarShortcut: false,
         includeCloseTabShortcut: false,
         includeSwitchSidesShortcut: false,
-        // Recording / Reset Canvas are intentionally still included here —
-        // they have non-desktop platforms (mobile Android / mobile both).
-        includeRecordingShortcut: true,
+        // Reset Canvas remains available on mobile.
         includeResetCanvasShortcut: true,
         includePinToolbarShortcut: false,
         includeViewModeShortcut: false,
-        includeVoiceCallShortcut: false,
       ),
     );
     final ids = idSet(groups);
@@ -251,22 +242,31 @@ void main() {
     expect(ids, contains(kShortcutActionInsertLock));
     expect(ids, contains(kShortcutActionRestartRemote));
     expect(ids, contains(kShortcutActionSwitchDisplayNext));
-    expect(ids, contains(kShortcutActionToggleRecording));
     expect(ids, contains(kShortcutActionResetCanvas));
     expect(ids, contains(kShortcutActionToggleMute));
   });
 
-  test(
-      'filterKeyboardShortcutActionGroupsForPlatform hides Toggle Recording on Web/iOS',
-      () {
-    final groups = filterKeyboardShortcutActionGroupsForPlatform(
-      capabilities(includeRecordingShortcut: false),
-    );
-    final ids = idSet(groups);
-    expect(ids, isNot(contains(kShortcutActionToggleRecording)));
-    // Other Session Control entries unaffected.
-    expect(ids, contains(kShortcutActionSendCtrlAltDel));
-    expect(ids, contains(kShortcutActionInsertLock));
+  test('saved bindings for removed actions cannot consume remote input', () {
+    final saved = ShortcutConfig.parse(jsonEncode({
+      'enabled': true,
+      'bindings': [
+        {'action': 'toggle_chat', 'mods': ['ctrl'], 'key': 'c'},
+        {'action': kShortcutActionToggleMute, 'mods': ['ctrl'], 'key': 'm'},
+      ],
+    }));
+    final active = saved.forPlatform(capabilities());
+    expect(active.bindings.map((b) => b['action']), [kShortcutActionToggleMute]);
+    expect(saved.bindings, hasLength(2));
+  });
+
+  test('streaming shortcut catalog omits removed feature actions', () {
+    final ids = idSet(filterKeyboardShortcutActionGroupsForPlatform(capabilities()));
+    expect(ids, isNot(contains('toggle_chat')));
+    expect(ids, isNot(contains('toggle_voice_call')));
+    expect(ids, isNot(contains('toggle_recording')));
+    expect(ids, isNot(contains('toggle_enable_file_copy_paste')));
+    expect(ids, contains(kShortcutActionToggleMute));
+    expect(ids, contains(kShortcutActionToggleDisableClipboard));
   });
 
   test(
@@ -299,11 +299,9 @@ void main() {
         includeToolbarShortcut: false,
         includeCloseTabShortcut: false,
         includeSwitchSidesShortcut: false,
-        includeRecordingShortcut: false,
         includeResetCanvasShortcut: false,
         includePinToolbarShortcut: false,
         includeViewModeShortcut: false,
-        includeVoiceCallShortcut: false,
       ),
     );
     final titles = groups.map((g) => g.titleKey).toList();
@@ -433,8 +431,6 @@ void main() {
       kShortcutActionKeyboardModeMap,
       kShortcutActionToggleShowMyCursor,
       kShortcutActionToggleZoomCursor,
-      kShortcutActionToggleRecording,
-      kShortcutActionToggleVoiceCall,
       kShortcutActionResetCanvas,
       kShortcutActionToggleMute,
       kShortcutActionSendCtrlAltDel,
@@ -447,8 +443,6 @@ void main() {
       ],
     }));
     final cap = capabilities(
-      includeRecordingShortcut: false,
-      includeVoiceCallShortcut: false,
       includeResetCanvasShortcut: false,
       excludedActions: {
         kShortcutActionSwitchDisplayAll,

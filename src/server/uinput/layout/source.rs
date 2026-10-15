@@ -27,7 +27,6 @@ impl Error for UnreliableSource {}
 pub(super) enum Source {
     Gnome(Names),
     Wayland { keymap: Vec<u8>, group: Option<u32> },
-    Xwayland { keymap: Vec<u8>, group: Option<u32> },
 }
 
 #[derive(PartialEq, Eq)]
@@ -78,10 +77,12 @@ impl Source {
         // Reliable native discovery needs a compositor query associating the
         // device's actual map (or verified effective configuration) with its group.
         // uinput supplies keycodes; it cannot report the compositor's XKB policy.
-        // Xwayland remains best effort; see xwayland::read for its freshness limits.
         // zwp_virtual_keyboard_manager_v1 needs a separate injection backend and
         // is not universally supported; it does not query an existing uinput map.
-        super::xwayland::read()
+        Err(
+            UnreliableSource("Native keyboard layout discovery is unavailable for this compositor")
+                .into(),
+        )
     }
 }
 

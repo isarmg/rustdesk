@@ -27,8 +27,7 @@ use crate::{
     ui_interface::{get_local_option, set_local_option},
 };
 use bytes::Bytes;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub use clipboard::ClipboardFile;
+
 #[cfg(target_os = "linux")]
 use hbb_common::anyhow;
 use hbb_common::{
@@ -66,8 +65,7 @@ pub(crate) use ipc_auth::{
     ensure_peer_executable_matches_current_by_fd, is_allowed_service_peer_uid,
     log_rejected_uinput_connection, peer_uid_from_fd,
 };
-#[cfg(target_os = "linux")]
-use ipc_fs::terminal_count_candidate_uids;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use ipc_fs::{
     check_pid, ensure_secure_ipc_parent_dir, scrub_secure_ipc_parent_dir,
@@ -135,106 +133,6 @@ impl Drop for UserMainIpcScope {
 #[inline]
 pub async fn connect_service(ms_timeout: u64) -> ResultType<ConnectionTmpl<ConnClient>> {
     connect(ms_timeout, crate::POSTFIX_SERVICE).await
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "t", content = "c")]
-pub enum FS {
-    ReadEmptyDirs {
-        dir: String,
-        include_hidden: bool,
-    },
-    ReadDir {
-        dir: String,
-        include_hidden: bool,
-    },
-    RemoveDir {
-        path: String,
-        id: i32,
-        recursive: bool,
-    },
-    RemoveFile {
-        path: String,
-        id: i32,
-        file_num: i32,
-    },
-    CreateDir {
-        path: String,
-        id: i32,
-    },
-    NewWrite {
-        path: String,
-        id: i32,
-        file_num: i32,
-        files: Vec<(String, u64)>,
-        overwrite_detection: bool,
-        total_size: u64,
-        conn_id: i32,
-    },
-    CancelWrite {
-        id: i32,
-    },
-    WriteBlock {
-        id: i32,
-        file_num: i32,
-        data: Bytes,
-        compressed: bool,
-    },
-    WriteDone {
-        id: i32,
-        file_num: i32,
-    },
-    WriteError {
-        id: i32,
-        file_num: i32,
-        err: String,
-    },
-    WriteOffset {
-        id: i32,
-        file_num: i32,
-        offset_blk: u32,
-    },
-    CheckDigest {
-        id: i32,
-        file_num: i32,
-        file_size: u64,
-        last_modified: u64,
-        is_upload: bool,
-        is_resume: bool,
-    },
-    SendConfirm(Vec<u8>),
-    Rename {
-        id: i32,
-        path: String,
-        new_name: String,
-    },
-    // CM-side file reading operations (Windows only)
-    // These enable Connection Manager to read files and stream them back to Connection
-    ReadFile {
-        path: String,
-        id: i32,
-        file_num: i32,
-        include_hidden: bool,
-        conn_id: i32,
-        overwrite_detection: bool,
-    },
-    CancelRead {
-        id: i32,
-        conn_id: i32,
-    },
-    SendConfirmForRead {
-        id: i32,
-        file_num: i32,
-        skip: bool,
-        offset_blk: u32,
-        conn_id: i32,
-    },
-    ReadAllFiles {
-        path: String,
-        id: i32,
-        include_hidden: bool,
-        conn_id: i32,
-    },
 }
 
 #[cfg(target_os = "windows")]
@@ -325,28 +223,23 @@ pub enum SwitchSidesUuidAction {
 pub enum Data {
     Login {
         id: i32,
-        is_file_transfer: bool,
-        is_view_camera: bool,
-        is_terminal: bool,
+
         peer_id: String,
         name: String,
         avatar: String,
         authorized: bool,
-        port_forward: String,
+
         keyboard: bool,
         clipboard: bool,
         audio: bool,
-        file: bool,
-        file_transfer_enabled: bool,
+
         restart: bool,
-        recording: bool,
+
         block_input: bool,
         privacy_mode: bool,
         from_switch: bool,
     },
-    ChatMessage {
-        text: String,
-    },
+
     SwitchPermission {
         name: String,
         enabled: bool,
@@ -367,12 +260,10 @@ pub enum Data {
     ConfirmedKey(Option<(Vec<u8>, Vec<u8>)>),
     RawMessage(Vec<u8>),
     Socks(Option<config::Socks5Server>),
-    FS(FS),
+
     Test,
     SyncConfig(Option<Box<(Config, Config2)>>),
-    #[cfg(target_os = "windows")]
-    ClipboardFile(ClipboardFile),
-    ClipboardFileEnabled(bool),
+
     #[cfg(target_os = "windows")]
     ClipboardNonFile(Option<(String, Vec<ClipboardNonFile>)>),
     PrivacyModeState((i32, PrivacyModeState, String)),
@@ -400,82 +291,13 @@ pub enum Data {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     SwitchSidesBack,
     UrlLink(String),
-    VoiceCallIncoming,
-    StartVoiceCall,
-    VoiceCallResponse(bool),
-    CloseVoiceCall(String),
     #[cfg(windows)]
     SyncWinCpuUsage(Option<f64>),
-    FileTransferLog((String, String)),
+
     #[cfg(windows)]
     ControlledSessionCount(usize),
     CmErr(String),
-    // CM-side file reading responses (Windows only)
-    // These are sent from CM back to Connection when CM handles file reading
-    /// Response to ReadFile: contains initial file list or error
-    ReadJobInitResult {
-        id: i32,
-        file_num: i32,
-        include_hidden: bool,
-        conn_id: i32,
-        /// Serialized protobuf bytes of FileDirectory, or error string
-        result: Result<Vec<u8>, String>,
-    },
-    /// File data block read by CM.
-    ///
-    /// The actual data is sent separately via `send_raw()` after this message to avoid
-    /// JSON encoding overhead for large binary data. This mirrors the `WriteBlock` pattern.
-    ///
-    /// **Protocol:**
-    /// - Sender: `send(FileBlockFromCM{...})` then `send_raw(data)`
-    /// - Receiver: `next()` returns `FileBlockFromCM`, then `next_raw()` returns data bytes
-    ///
-    /// **Note on empty data (e.g., empty files):**
-    /// Empty data is supported. The IPC connection uses `BytesCodec` with `raw=false` (default),
-    /// which prefixes each frame with a length header. So `send_raw(Bytes::new())` sends a
-    /// 1-byte frame (length=0), and `next_raw()` correctly returns an empty `BytesMut`.
-    /// See `libs/hbb_common/src/bytes_codec.rs` test `test_codec2` for verification.
-    FileBlockFromCM {
-        id: i32,
-        file_num: i32,
-        /// Data is sent separately via `send_raw()` to avoid JSON encoding overhead.
-        /// This field is skipped during serialization; sender must call `send_raw()` after sending.
-        /// Receiver must call `next_raw()` and populate this field manually.
-        #[serde(skip)]
-        data: bytes::Bytes,
-        compressed: bool,
-        conn_id: i32,
-    },
-    /// File read completed successfully
-    FileReadDone {
-        id: i32,
-        file_num: i32,
-        conn_id: i32,
-    },
-    /// File read failed with error
-    FileReadError {
-        id: i32,
-        file_num: i32,
-        err: String,
-        conn_id: i32,
-    },
-    /// Digest info from CM for overwrite detection
-    FileDigestFromCM {
-        id: i32,
-        file_num: i32,
-        last_modified: u64,
-        file_size: u64,
-        is_resume: bool,
-        conn_id: i32,
-    },
-    /// Response to ReadAllFiles: recursive directory listing
-    AllFilesResult {
-        id: i32,
-        conn_id: i32,
-        path: String,
-        /// Serialized protobuf bytes of FileDirectory, or error string
-        result: Result<Vec<u8>, String>,
-    },
+
     CheckHwcodec,
     #[cfg(feature = "flutter")]
     VideoConnCount(Option<usize>),
@@ -484,26 +306,20 @@ pub enum Data {
     HwCodecConfig(Option<String>),
     RemoveTrustedDevices(Vec<Bytes>),
     ClearTrustedDevices,
-    #[cfg(all(target_os = "windows", feature = "flutter"))]
-    PrinterData(Vec<u8>),
-    InstallOption(Option<(String, String)>),
+
     #[cfg(all(
         feature = "flutter",
         not(any(target_os = "android", target_os = "ios"))
     ))]
     ControllingSessionCount(usize),
-    #[cfg(target_os = "linux")]
-    TerminalSessionCount(usize),
-    #[cfg(target_os = "windows")]
-    PortForwardSessionCount(Option<usize>),
+
     SocksWs(Option<Box<(Option<config::Socks5Server>, String)>>),
     #[cfg(target_os = "macos")]
     HasNoActiveConns(Option<bool>),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Whiteboard((String, crate::whiteboard::CustomEvent)),
     ControlPermissionsRemoteModify(Option<bool>),
-    #[cfg(target_os = "windows")]
-    FileTransferEnabledState(Option<bool>),
+
     /// CM -> server: the connection manager's WINDOW went away, which is not the same event
     /// as the operator disconnecting a peer. Linux only, and deliberately: there a session
     /// logout closes every window, and the close arrives at the CM indistinguishable from a
@@ -774,7 +590,6 @@ pub struct CheckIfRestart {
     stop_service: String,
     rendezvous_servers: Vec<String>,
     audio_input: String,
-    voice_call_input: String,
     ws: String,
     disable_udp: String,
     allow_insecure_tls_fallback: String,
@@ -787,7 +602,6 @@ impl CheckIfRestart {
             stop_service: Config::get_option("stop-service"),
             rendezvous_servers: Config::get_rendezvous_servers(),
             audio_input: Config::get_option("audio-input"),
-            voice_call_input: Config::get_option("voice-call-input"),
             ws: Config::get_option(OPTION_ALLOW_WEBSOCKET),
             disable_udp: Config::get_option(keys::OPTION_DISABLE_UDP),
             allow_insecure_tls_fallback: Config::get_option(
@@ -819,12 +633,7 @@ impl Drop for CheckIfRestart {
         if self.audio_input != Config::get_option("audio-input") {
             crate::audio_service::restart();
         }
-        if self.voice_call_input != Config::get_option("voice-call-input") {
-            crate::audio_service::set_voice_call_input_device(
-                Some(Config::get_option("voice-call-input")),
-                true,
-            )
-        }
+
     }
 }
 
@@ -976,14 +785,13 @@ async fn handle(data: Data, stream: &mut Connection) {
                         None
                     };
                 } else if name == "hide_cm" {
-                    value = if crate::hbbs_http::sync::is_pro() || crate::common::is_custom_client()
+                    value = if crate::common::is_custom_client()
                     {
                         Some(hbb_common::password_security::hide_cm().to_string())
                     } else {
                         None
                     };
-                } else if name == "voice-call-input" {
-                    value = crate::audio_service::get_voice_call_input_device();
+
                 } else if name == "unlock-pin" {
                     value = Some(Config::get_unlock_pin());
                 } else if name == "trusted-devices" {
@@ -1020,8 +828,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                     allow_err!(stream.send(&Data::Config((name.clone(), Some(ack)))).await);
                 } else if name == "salt" {
                     Config::set_salt(&value);
-                } else if name == "voice-call-input" {
-                    crate::audio_service::set_voice_call_input_device(Some(value), true);
+
                 } else if name == "unlock-pin" {
                     Config::set_unlock_pin(&value);
                 } else {
@@ -1089,7 +896,6 @@ async fn handle(data: Data, stream: &mut Connection) {
         Data::SwitchSidesRequest(id) => {
             let uuid = uuid::Uuid::new_v4();
             crate::server::insert_switch_sides_uuid(id, uuid.clone());
-            crate::hbbs_http::sync::register_switch_grant(uuid.to_string());
             allow_err!(
                 stream
                     .send(&Data::SwitchSidesRequest(uuid.to_string()))
@@ -1143,11 +949,7 @@ async fn handle(data: Data, stream: &mut Connection) {
         Data::ControllingSessionCount(count) => {
             crate::updater::update_controlling_session_count(count);
         }
-        #[cfg(target_os = "linux")]
-        Data::TerminalSessionCount(_) => {
-            let count = crate::terminal_service::get_terminal_session_count(true);
-            allow_err!(stream.send(&Data::TerminalSessionCount(count)).await);
-        }
+
         #[cfg(feature = "hwcodec")]
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         Data::CheckHwcodec => {
@@ -1220,42 +1022,7 @@ async fn handle(data: Data, stream: &mut Connection) {
         Data::ClearTrustedDevices => {
             Config::clear_trusted_devices();
         }
-        Data::InstallOption(opt) => match opt {
-            Some((_k, _v)) => {
-                #[cfg(target_os = "windows")]
-                if let Err(e) = crate::platform::windows::update_install_option(&_k, &_v) {
-                    log::error!(
-                        "Failed to update install option \"{}\" to \"{}\", error: {}",
-                        &_k,
-                        &_v,
-                        e
-                    );
-                }
-            }
-            None => {
-                // `None` is usually used to get values.
-                // This branch is left blank for unification and further use.
-            }
-        },
-        #[cfg(target_os = "windows")]
-        Data::PortForwardSessionCount(c) => match c {
-            None => {
-                let count = crate::server::AUTHED_CONNS
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|c| c.conn_type == crate::server::AuthConnType::PortForward)
-                    .count();
-                allow_err!(
-                    stream
-                        .send(&Data::PortForwardSessionCount(Some(count)))
-                        .await
-                );
-            }
-            _ => {
-                // Port forward session count is only a get value.
-            }
-        },
+
         Data::ControlPermissionsRemoteModify(_) => {
             use hbb_common::rendezvous_proto::control_permissions::Permission;
             let state =
@@ -1266,21 +1033,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                     .await
             );
         }
-        #[cfg(target_os = "windows")]
-        Data::FileTransferEnabledState(_) => {
-            use hbb_common::rendezvous_proto::control_permissions::Permission;
-            let state = crate::server::get_control_permission_state(Permission::file, false);
-            let enabled = state.unwrap_or_else(|| {
-                crate::server::Connection::is_permission_enabled_locally(
-                    keys::OPTION_ENABLE_FILE_TRANSFER,
-                )
-            });
-            allow_err!(
-                stream
-                    .send(&Data::FileTransferEnabledState(Some(enabled)))
-                    .await
-            );
-        }
+
         _ => {}
     };
 }
@@ -2062,16 +1815,6 @@ pub async fn notify_server_to_check_hwcodec() -> ResultType<()> {
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
-pub async fn get_port_forward_session_count(ms_timeout: u64) -> ResultType<usize> {
-    let mut c = connect(ms_timeout, "").await?;
-    c.send(&Data::PortForwardSessionCount(None)).await?;
-    if let Some(Data::PortForwardSessionCount(Some(count))) = c.next_timeout(ms_timeout).await? {
-        return Ok(count);
-    }
-    bail!("Failed to get port forward session count");
-}
-
 #[cfg(feature = "hwcodec")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tokio::main(flavor = "current_thread")]
@@ -2174,81 +1917,6 @@ pub async fn update_controlling_session_count(count: usize) -> ResultType<()> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::main(flavor = "current_thread")]
-pub async fn get_terminal_session_count() -> ResultType<usize> {
-    let timeout_ms = 1_000;
-    let effective_uid = unsafe { hbb_common::libc::geteuid() as u32 };
-    let candidate_uids = terminal_count_candidate_uids(effective_uid);
-    let mut last_err: Option<anyhow::Error> = None;
-    for candidate_uid in candidate_uids {
-        let socket_path = Config::ipc_path_for_uid(candidate_uid, "");
-        let connect_result = timeout(timeout_ms, Endpoint::connect(&socket_path))
-            .await
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "Timeout connecting to terminal ipc at {}: {}",
-                    socket_path,
-                    err
-                )
-            });
-        let connection = match connect_result {
-            Ok(Ok(connection)) => connection,
-            Ok(Err(err)) => {
-                last_err = Some(anyhow::anyhow!(
-                    "Failed to connect to terminal ipc at {}: {}",
-                    socket_path,
-                    err
-                ));
-                continue;
-            }
-            Err(err) => {
-                last_err = Some(err);
-                continue;
-            }
-        };
-        let mut ipc_conn = ConnectionTmpl::new(connection);
-        if let Err(err) = ipc_conn.send(&Data::TerminalSessionCount(0)).await {
-            last_err = Some(anyhow::anyhow!(
-                "Failed to request terminal session count via ipc at {}: {}",
-                socket_path,
-                err
-            ));
-            continue;
-        }
-        match ipc_conn.next_timeout(timeout_ms).await {
-            Ok(Some(Data::TerminalSessionCount(session_count))) => {
-                return Ok(session_count);
-            }
-            Ok(None) => {
-                last_err = Some(anyhow::anyhow!(
-                    "Invalid response when requesting terminal session count via ipc at {}",
-                    socket_path
-                ));
-            }
-            Ok(other) => {
-                last_err = Some(anyhow::anyhow!(
-                    "Unexpected response when requesting terminal session count via ipc at {}: {:?}",
-                    socket_path,
-                    other.map(|v| std::mem::discriminant(&v))
-                ));
-            }
-            Err(err) => {
-                last_err = Some(anyhow::anyhow!(
-                    "Failed to read terminal session count via ipc at {}: {}",
-                    socket_path,
-                    err
-                ));
-            }
-        }
-    }
-    if let Some(err) = last_err {
-        Err(err.into())
-    } else {
-        Ok(0)
-    }
-}
-
 async fn handle_wayland_screencast_restore_token(
     key: String,
     value: String,
@@ -2262,16 +1930,6 @@ async fn handle_wayland_screencast_restore_token(
         return Ok(Some(v));
     }
     return Ok(None);
-}
-
-#[tokio::main(flavor = "current_thread")]
-pub async fn set_install_option(k: String, v: String) -> ResultType<()> {
-    if let Ok(mut c) = connect(1000, "").await {
-        c.send(&&Data::InstallOption(Some((k, v)))).await?;
-        // do not put below before connect, because we need to check should_exit
-        c.next_timeout(1000).await.ok();
-    }
-    Ok(())
 }
 
 #[cfg(test)]

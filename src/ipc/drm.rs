@@ -788,13 +788,11 @@ fn drm_udev_listener() {
 }
 
 fn drm_prewarm() {
-    // Re-ask, bounded: `get_display_server()` falls back to "x11" when it cannot tell (measured:
-    // "x11" 0.8 s into a boot on a Wayland host). `is_x11_for_drm()` is that path minus the
-    // greeter blind spot, which a login screen never leaves.
+    // Wait briefly for logind to identify the Wayland session during boot.
     const PREWARM_SESSION_RECHECK: std::time::Duration = std::time::Duration::from_secs(2);
     const PREWARM_SESSION_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
     let waited = std::time::Instant::now();
-    while crate::platform::linux::is_x11_for_drm() {
+    while !crate::platform::linux::is_wayland_session_available() {
         if waited.elapsed() >= PREWARM_SESSION_BUDGET {
             log::info!(
                 "drm: session still reads as X11 after {:?}; skipping the pre-warm \

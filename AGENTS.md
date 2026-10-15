@@ -6,7 +6,6 @@
 * `src/` Rust app
 * `src/server/` audio / clipboard / input / video / network
 * `src/platform/` platform-specific code
-* `src/ui/` legacy Sciter UI (deprecated)
 * `flutter/` current UI
 * `libs/hbb_common/` shared with the server: rendezvous proto, sockets, `Config` core
 * `libs/base/` (crate `base`) client-only: option keys, message proto, file transfer, platform code
@@ -28,8 +27,7 @@ workspace member. `base::config::keys` re-exports the handful of keys
 `hbb_common` still reads, so callers get the whole set from that one path.
 
 ### UI Architecture
-- **Legacy UI**: Sciter-based (deprecated) - files in `src/ui/`
-- **Modern UI**: Flutter-based - files in `flutter/`
+- **UI**: Flutter-based - files in `flutter/`
   - Desktop: `flutter/lib/desktop/`
   - Mobile: `flutter/lib/mobile/`
   - Shared: `flutter/lib/common/` and `flutter/lib/models/`

@@ -26,7 +26,7 @@ const String kPlatformAdditionsRustDeskVirtualDisplays =
     "rustdesk_virtual_displays";
 const String kPlatformAdditionsAmyuniVirtualDisplays =
     "amyuni_virtual_displays";
-const String kPlatformAdditionsHasFileClipboard = "has_file_clipboard";
+
 const String kPlatformAdditionsSupportedPrivacyModeImpl =
     "supported_privacy_mode_impl";
 
@@ -49,10 +49,10 @@ const String kAppTypeMain = "main";
 const String kAppTypeConnectionManager = "cm";
 
 const String kAppTypeDesktopRemote = "remote";
-const String kAppTypeDesktopFileTransfer = "file transfer";
-const String kAppTypeDesktopViewCamera = "view camera";
-const String kAppTypeDesktopPortForward = "port forward";
-const String kAppTypeDesktopTerminal = "terminal";
+
+
+
+
 
 const String kWindowMainWindowOnTop = "main_window_on_top";
 const String kWindowRefreshCurrentUser = "refresh_current_user";
@@ -66,11 +66,11 @@ const String kWindowConnect = "connect";
 const String kWindowBumpMouse = "bump_mouse";
 
 const String kWindowEventNewRemoteDesktop = "new_remote_desktop";
-const String kWindowEventNewFileTransfer = "new_file_transfer";
-const String kWindowEventNewViewCamera = "new_view_camera";
-const String kWindowEventNewPortForward = "new_port_forward";
-const String kWindowEventNewTerminal = "new_terminal";
-const String kWindowEventRestoreTerminalSessions = "restore_terminal_sessions";
+
+
+
+
+
 const String kWindowEventActiveSession = "active_session";
 const String kWindowEventActiveDisplaySession = "active_display_session";
 const String kWindowEventGetRemoteList = "get_remote_list";
@@ -97,31 +97,30 @@ const String kOptionEnableLanDiscovery = "enable-lan-discovery";
 const String kOptionWhitelist = "whitelist";
 const String kOptionIdWhitelist = "id-whitelist";
 const String kOptionEnableAbr = "enable-abr";
-const String kOptionEnableRecordSession = "enable-record-session";
+
 const String kOptionDirectServer = "direct-server";
 const String kOptionDirectAccessPort = "direct-access-port";
 const String kOptionAllowAutoDisconnect = "allow-auto-disconnect";
 const String kOptionAutoDisconnectTimeout = "auto-disconnect-timeout";
 const String kOptionEnableHwcodec = "enable-hwcodec";
-const String kOptionAllowAutoRecordIncoming = "allow-auto-record-incoming";
-const String kOptionAllowAutoRecordOutgoing = "allow-auto-record-outgoing";
-const String kOptionHideRecordingButton = "hide-recording-button";
+
+
+
 const String kOptionVideoSaveDirectory = "video-save-directory";
 const String kOptionAccessMode = "access-mode";
 const String kOptionEnableKeyboard = "enable-keyboard";
 // "Settings -> Security -> Permissions"
-const String kOptionEnableRemotePrinter = "enable-remote-printer";
+
 const String kOptionEnableClipboard = "enable-clipboard";
-const String kOptionEnableFileTransfer = "enable-file-transfer";
+
 const String kOptionEnableAudio = "enable-audio";
-const String kOptionEnableCamera = "enable-camera";
-const String kOptionEnableTerminal = "enable-terminal";
-const String kOptionTerminalPersistent = "terminal-persistent";
-const String kOptionAllowTerminalClipboardWrite =
-    "allow-terminal-clipboard-write";
-const String kTerminalClipboardWriteUnconfigured = "";
-const String kTerminalClipboardWriteAllowed = "Y";
-const String kTerminalClipboardWriteDenied = "N";
+
+
+
+
+
+
+
 const String kOptionEnableTunnel = "enable-tunnel";
 const String kOptionEnableRemoteRestart = "enable-remote-restart";
 const String kOptionEnableBlockInput = "enable-block-input";
@@ -144,7 +143,6 @@ const String kOptionFollowRemoteWindow = "follow_remote_window";
 const String kOptionZoomCursor = "zoom-cursor";
 const String kOptionShowQualityMonitor = "show_quality_monitor";
 const String kOptionDisableAudio = "disable_audio";
-const String kOptionEnableFileCopyPaste = "enable-file-copy-paste";
 // "Settings -> Display -> Other default options"
 const String kOptionDisableClipboard = "disable_clipboard";
 const String kOptionLockAfterSessionEnd = "lock_after_session_end";
@@ -152,6 +150,8 @@ const String kOptionPrivacyMode = "privacy_mode";
 const String kOptionTouchMode = "touch-mode";
 const String kOptionI444 = "i444";
 const String kOptionSwapLeftRightMouse = "swap-left-right-mouse";
+const String kOptionStreamingMode = "streaming-mode";
+const String kOptionStreamingFps = "streaming-fps";
 const String kOptionCodecPreference = "codec-preference";
 const String kOptionRemoteMenubarDragLeft = "remote-menubar-drag-left";
 const String kOptionRemoteMenubarDragRight = "remote-menubar-drag-right";
@@ -159,16 +159,15 @@ const String kOptionRemoteMenubarEdge = "remote-menubar-edge";
 const String kOptionRemoteMenubarFraction = "remote-menubar-frac";
 const String kOptionAllowMultiEdgeToolbarDock =
     "allow-multi-edge-toolbar-dock";
-const String kOptionHideAbTagsPanel = "hideAbTagsPanel";
+
 const String kOptionRemoteMenubarState = "remoteMenubarState";
 const String kOptionPeerSorting = "peer-sorting";
 const String kOptionPeerTabIndex = "peer-tab-index";
 const String kOptionPeerTabOrder = "peer-tab-order";
 const String kOptionPeerTabVisible = "peer-tab-visible";
 const String kOptionPeerCardUiType = "peer-card-ui-type";
-const String kOptionCurrentAbName = "current-ab-name";
 const String kOptionEnableConfirmClosingTabs = "enable-confirm-closing-tabs";
-const String kOptionEnablePortForwardMux = "enable-port-forward-mux";
+
 const String kOptionAllowAlwaysSoftwareRender = "allow-always-software-render";
 const String kOptionEnableCheckUpdate = "enable-check-update";
 const String kOptionAllowAutoUpdate = "allow-auto-update";
@@ -187,11 +186,10 @@ const String kOptionEnableTrustedDevices = "enable-trusted-devices";
 const String kOptionShowVirtualMouse = "show-virtual-mouse";
 const String kOptionVirtualMouseScale = "virtual-mouse-scale";
 const String kOptionShowVirtualJoystick = "show-virtual-joystick";
-const String kOptionAllowAskForNoteAtEndOfConnection = "allow-ask-for-note";
 const String kOptionAllowMonitorSwitchMainToolbar = "allow-monitor-switch-main-toolbar";
 const String kOptionAllowMonitorSwitchMinToolbar = "allow-monitor-switch-min-toolbar";
-const String kOptionEnableShowTerminalExtraKeys = "enable-show-terminal-extra-keys";
-const String kOptionShowTerminalCtrlKeys = "show-terminal-extra-ctrl-keys";
+
+
 
 // network options
 const String kOptionAllowWebSocket = "allow-websocket";
@@ -204,7 +202,7 @@ const String kOptionHideServerSetting = "hide-server-settings";
 const String kOptionHideProxySetting = "hide-proxy-settings";
 const String kOptionHideWebSocketSetting = "hide-websocket-settings";
 const String kOptionHideStopService = "hide-stop-service";
-const String kOptionHideRemotePrinterSetting = "hide-remote-printer-settings";
+
 const String kOptionHideGeneralSetting = "hide-general-settings";
 const String kOptionHideSecuritySetting = "hide-security-settings";
 const String kOptionHideNetworkSetting = "hide-network-settings";
@@ -276,8 +274,8 @@ const int kDesktopDefaultDisplayHeight = 720;
 const int kMobileMaxDisplaySize = 1280;
 const int kDesktopMaxDisplaySize = 3840;
 
-const double kDesktopFileTransferRowHeight = 30.0;
-const double kDesktopFileTransferHeaderHeight = 25.0;
+
+
 
 const double kMinFps = 5;
 const double kDefaultFps = 30;
@@ -322,13 +320,13 @@ const int kMaxRelativeMouseDelta = 10000;
 const int kRelativeMouseModeToggleDebounceMs = 150;
 
 // incomming (should be incoming) is kept, because change it will break the previous setting.
-const String kKeyPrinterIncomingJobAction = 'printer-incomming-job-action';
-const String kValuePrinterIncomingJobDismiss = 'dismiss';
-const String kValuePrinterIncomingJobDefault = '';
-const String kValuePrinterIncomingJobSelected = 'selected';
-const String kKeyPrinterSelected = 'printer-selected-name';
-const String kKeyPrinterSave = 'allow-printer-dialog-save';
-const String kKeyPrinterAllowAutoPrint = 'allow-printer-auto-print';
+
+
+
+
+
+
+
 
 double kNewWindowOffset = isWindows
     ? 56.0
@@ -352,7 +350,7 @@ extension StringExtension on String {
 }
 
 const Size kConnectionManagerWindowSizeClosedChat = Size(300, 490);
-const Size kConnectionManagerWindowSizeOpenChat = Size(700, 490);
+
 // Tabbar transition duration, now we remove the duration
 const Duration kTabTransitionDuration = Duration.zero;
 const double kEmptyMarginTop = 50;
@@ -465,12 +463,8 @@ class AndroidChannel {
   static final kGetStartOnBootOpt = "get_start_on_boot_opt";
   static final kSetStartOnBootOpt = "set_start_on_boot_opt";
   static final kSyncAppDirConfigPath = "sync_app_dir";
-  static final kPickImportFiles = "pick_import_files";
-  static final kImportFile = "import_file";
-  static final kExportFile = "export_file";
   static final kPickImportDirectory = "pick_import_directory";
   static final kImportDirectory = "import_directory";
-  static final kExportFiles = "export_files";
 }
 
 /// flutter/packages/flutter/lib/src/services/keyboard_key.dart -> _keyLabels

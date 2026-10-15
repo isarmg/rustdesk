@@ -66,8 +66,6 @@ final List<KeyboardShortcutActionGroup> kKeyboardShortcutActionGroups = [
         kShortcutActionToggleBlockInput, 'Block user input'),
     KeyboardShortcutActionEntry(kShortcutActionSwitchSides, 'Switch Sides'),
     KeyboardShortcutActionEntry(kShortcutActionRefresh, 'Refresh'),
-    KeyboardShortcutActionEntry(
-        kShortcutActionToggleRecording, 'Toggle session recording'),
     KeyboardShortcutActionEntry(kShortcutActionScreenshot, 'Take screenshot'),
   ]),
   // Display: subgroups (View Mode → Image Quality → Codec → Virtual display)
@@ -116,8 +114,6 @@ final List<KeyboardShortcutActionGroup> kKeyboardShortcutActionGroups = [
         kShortcutActionToggleQualityMonitor, 'Show quality monitor'),
     KeyboardShortcutActionEntry(kShortcutActionToggleMute, 'Mute'),
     KeyboardShortcutActionEntry(
-        kShortcutActionToggleEnableFileCopyPaste, 'Enable file copy and paste'),
-    KeyboardShortcutActionEntry(
         kShortcutActionToggleDisableClipboard, 'Disable clipboard'),
     KeyboardShortcutActionEntry(
         kShortcutActionToggleLockAfterSessionEnd, 'Lock after session end'),
@@ -159,10 +155,6 @@ final List<KeyboardShortcutActionGroup> kKeyboardShortcutActionGroups = [
         kShortcutActionToggleReverseMouseWheel, 'Reverse mouse wheel'),
     KeyboardShortcutActionEntry(
         kShortcutActionToggleSwapLeftRightMouse, 'swap-left-right-mouse'),
-  ]),
-  KeyboardShortcutActionGroup('Chat', [
-    KeyboardShortcutActionEntry(kShortcutActionToggleChat, 'Text chat'),
-    KeyboardShortcutActionEntry(kShortcutActionToggleVoiceCall, 'Voice call'),
   ]),
   // "Other" collects single-icon toolbar buttons that have no dropdown
   // (Pin, Close), plus actions with no toolbar entry at all (Fullscreen —
@@ -242,9 +234,6 @@ List<KeyboardShortcutActionGroup> filterKeyboardShortcutActionGroupsForPlatform(
     if (!cap.includeSwitchSidesShortcut && id == kShortcutActionSwitchSides) {
       return false;
     }
-    if (!cap.includeRecordingShortcut && id == kShortcutActionToggleRecording) {
-      return false;
-    }
     if (!cap.includeResetCanvasShortcut && id == kShortcutActionResetCanvas) {
       return false;
     }
@@ -255,9 +244,6 @@ List<KeyboardShortcutActionGroup> filterKeyboardShortcutActionGroupsForPlatform(
         (id == kShortcutActionViewModeOriginal ||
             id == kShortcutActionViewModeAdaptive ||
             id == kShortcutActionViewModeCustom)) {
-      return false;
-    }
-    if (!cap.includeVoiceCallShortcut && id == kShortcutActionToggleVoiceCall) {
       return false;
     }
     return true;

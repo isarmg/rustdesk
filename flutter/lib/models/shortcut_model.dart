@@ -5,15 +5,12 @@ import 'package:flutter/foundation.dart';
 
 import '../common.dart';
 import '../common/shared_state.dart' show PrivacyModeState;
-import '../common/widgets/dialog.dart'
-    show desktopTryShowTabAuditDialogCloseCancelled;
 import '../common/widgets/keyboard_shortcuts/shortcut_utils.dart';
 import '../common/widgets/keyboard_shortcuts/shortcut_actions.dart';
 import '../common/widgets/toolbar.dart'
     show allowDisplaySwitchInPrivacyMode, showVirtualDisplayMenu;
 import '../consts.dart';
 import '../desktop/widgets/remote_toolbar.dart' show ToolbarState;
-import 'chat_model.dart' show ChatModel, MessageKey, VoiceCallStatus;
 import '../desktop/widgets/tabbar_widget.dart' show DesktopTabController;
 import '../models/model.dart';
 import '../models/platform_model.dart';
@@ -194,15 +191,8 @@ class ShortcutModel {
   ///     toolbars don't surface either action.
   ///   * Tab navigation / Close Tab: only native desktop ships
   ///     `DesktopTabController`; Web's `RemotePage` is invoked without one.
-  ///   * Recording: native desktop has the `_RecordMenu` widget +
-  ///     `registerSessionShortcutActions` registration; native Android has
-  ///     the `toolbarControls` entry; iOS short-circuits inside
-  ///     `recordingModel.toggle()`; Web has no implementation.
   ///   * Reset Canvas: only the mobile toolbar builds the menu entry
   ///     (`isDefaultConn && isMobile` in `toolbarControls`).
-  ///   * Voice Call: iOS has no audio capture implementation; Web bridge throws
-  ///     `UnimplementedError` for both `sessionRequestVoiceCall` and
-  ///     `sessionCloseVoiceCall`.
   static ShortcutPlatformCapabilities currentPlatformCapabilities() {
     final desktopLayout = isDesktop || isWeb;
     return ShortcutPlatformCapabilities(
@@ -214,15 +204,12 @@ class ShortcutModel {
       includeToolbarShortcut: desktopLayout,
       includeCloseTabShortcut: isDesktop,
       includeSwitchSidesShortcut: isDesktop,
-      includeRecordingShortcut: !isWeb && !isIOS,
       includeResetCanvasShortcut: isMobile,
       includePinToolbarShortcut: desktopLayout,
       includeViewModeShortcut: true,
-      includeVoiceCallShortcut: !isWeb && !isIOS,
       excludedActions: Set.unmodifiable({
         if (!isDesktop) ...[
           kShortcutActionSwitchDisplayAll,
-          kShortcutActionToggleEnableFileCopyPaste,
         ],
         if (isMobile) ...[
           kShortcutActionKeyboardModeLegacy,
@@ -254,6 +241,13 @@ class ShortcutConfig {
         .map((entry) => entry.id)
         .where((id) => !visible.contains(id))
         .toSet();
+    // Old saved bindings must no longer consume input for removed features.
+    hidden.addAll(const {
+      'toggle_chat',
+      'toggle_voice_call',
+      'toggle_recording',
+      'toggle_enable_file_copy_paste',
+    });
     return ShortcutConfig._(
       enabled,
       passThrough,
@@ -319,19 +313,6 @@ void registerSessionShortcutActions(
   if (isDesktop || isWeb) {
     ffi.shortcutModel.register(kShortcutActionToggleFullscreen, () {
       stateGlobal.setFullscreen(!stateGlobal.fullscreen.value);
-    });
-  }
-
-  // Toggle Recording — desktop only here. Mobile already wires this through
-  // `toolbarControls` (which adds a recording entry on `!(isDesktop||isWeb)`),
-  // but the desktop toolbar uses a separate `_RecordMenu` widget that has no
-  // `actionId`. Without this explicit registration a desktop user could bind
-  // Toggle Recording in settings and the press would have no handler.
-  // `recordingModel.toggle()` itself short-circuits on iOS and on sessions
-  // without recording permission.
-  if (isDesktop) {
-    ffi.shortcutModel.register(kShortcutActionToggleRecording, () {
-      ffi.recordingModel.toggle();
     });
   }
 
@@ -427,12 +408,7 @@ void registerSessionShortcutActions(
     // including the audit-log confirmation dialog so a shortcut close goes
     // through the same path as a menu close.
     ffi.shortcutModel.register(kShortcutActionCloseTab, () async {
-      if (await desktopTryShowTabAuditDialogCloseCancelled(
-        id: ffi.id,
-        tabController: tabController,
-      )) {
-        return;
-      }
+
       tabController.closeBy(ffi.id);
     });
   }
@@ -445,31 +421,6 @@ void registerSessionShortcutActions(
     });
     ffi.shortcutModel.register(kShortcutActionPinToolbar, () {
       toolbarState.switchPin();
-    });
-  }
-
-  // Toggle Chat overlay (open/close the chat panel for this session).
-  // _ChatMenu is a standalone toolbar icon — not part of any toolbar
-  // helper that returns a TToggleMenu list — so its handler is wired
-  // here rather than picked up by helper auto-register.
-  ffi.shortcutModel.register(kShortcutActionToggleChat, () {
-    ffi.chatModel.changeCurrentKey(MessageKey(ffi.id, ChatModel.clientModeID));
-    ffi.chatModel.toggleChatOverlay();
-  });
-
-  // Toggle Voice Call — start when idle, hang up when active. Mirrors the
-  // toolbar's `_VoiceCallMenu` state-driven button. Web bridge throws
-  // UnimplementedError on both sessionRequestVoiceCall and
-  // sessionCloseVoiceCall; iOS has no audio capture implementation.
-  if (!isWeb && !isIOS) {
-    ffi.shortcutModel.register(kShortcutActionToggleVoiceCall, () {
-      final status = ffi.chatModel.voiceCallStatus.value;
-      if (status == VoiceCallStatus.connected ||
-          status == VoiceCallStatus.waitingForResponse) {
-        bind.sessionCloseVoiceCall(sessionId: sessionId);
-      } else {
-        bind.sessionRequestVoiceCall(sessionId: sessionId);
-      }
     });
   }
 

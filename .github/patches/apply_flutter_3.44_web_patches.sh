@@ -46,6 +46,5 @@ python3 flutter/web/fonts/sync_fonts.py
 # Fail loudly if any expected state is missing:
 grep -qF "import 'dart:ui' as ui; import 'dart:ui_web' as ui_web;" "$QR_WEB"
 grep -qF "ui_web.platformViewRegistry" "$QR_WEB"
-grep -qF 'google_fonts: ^8.1.0' flutter/pubspec.yaml
 
 echo "Flutter 3.44 web patches applied."

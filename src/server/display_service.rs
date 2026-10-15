@@ -1,7 +1,7 @@
 use super::*;
 use crate::common::SimpleCallOnReturn;
 #[cfg(target_os = "linux")]
-use crate::platform::linux::is_x11;
+use crate::platform::linux::is_wayland_session_available;
 #[cfg(windows)]
 use crate::virtual_display_manager;
 #[cfg(windows)]
@@ -324,7 +324,7 @@ pub(super) fn remap_wayland_uinput_coord(x: i32, y: i32) -> (i32, i32) {
 // range and land offset, https://github.com/rustdesk/rustdesk/issues/15601
 #[cfg(target_os = "linux")]
 fn refresh_wayland_uinput_rect_if_changed() {
-    if is_x11() || !crate::input_service::wayland_use_uinput() {
+    if !crate::input_service::wayland_use_uinput() {
         return;
     }
     {
@@ -543,19 +543,22 @@ pub fn temp_ignore_displays_changed() -> SimpleCallOnReturn {
 // The video server will then send the following messages to the client:
 //  1. the supported resolutions of the {idx} display
 //  2. the switch resolution message, so that the client can record the custom resolution.
+#[cfg(target_os = "linux")]
+pub(super) fn check_display_changed(
+    _ndisplay: usize,
+    _idx: usize,
+    _rect: (i32, i32, usize, usize),
+) -> Option<DisplayInfo> {
+    // Wayland layout changes are published through the compositor/DRM snapshot.
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
 pub(super) fn check_display_changed(
     ndisplay: usize,
     idx: usize,
     (x, y, w, h): (i32, i32, usize, usize),
 ) -> Option<DisplayInfo> {
-    #[cfg(target_os = "linux")]
-    {
-        // wayland do not support changing display for now
-        if !is_x11() {
-            return None;
-        }
-    }
-
     let lock = SYNC_DISPLAYS.lock().unwrap();
     // If plugging out a monitor && lock.displays.get(idx) is None.
     //  1. The client version < 1.2.4. The client side has to reconnect.
@@ -655,46 +658,45 @@ fn displays_to_msg(displays: Vec<DisplayInfo>) -> Message {
 fn check_get_displays_changed_msg() -> Option<Message> {
     #[cfg(target_os = "linux")]
     {
-        if !is_x11() {
-            // On the DRM/KMS capture path the PipeWire enumeration (which is what feeds
-            // `SYNC_DISPLAYS` via `check_update_displays`) is bypassed, so populate the sync list
-            // from the DRM display list here. Without this the display service broadcasts an empty
-            // list that overwrites the login peer-info displays and the client shows "No displays".
-            #[cfg(feature = "drm")]
-            if super::drm_capturer::is_available_cached() {
-                let synced = !SYNC_DISPLAYS.lock().unwrap().displays.is_empty();
-                let stamped_before = scrap::wayland::display::wayland_failure_stamped();
-                // With nothing published yet, even the unaugmented DRM list beats the empty
-                // broadcast below; with a synced layout, a suppressed turn keeps it instead.
-                if !synced || !scrap::wayland::display::wayland_lookup_suppressed() {
-                    if let Some(displays) = super::drm_capturer::get_display_infos() {
-                        // A first failure keeps the synced layout for one backoff; only a
-                        // failure that persists across one replaces it with the DRM stack.
-                        if !synced
-                            || stamped_before
-                            || !scrap::wayland::display::wayland_lookup_suppressed()
-                        {
-                            SYNC_DISPLAYS.lock().unwrap().check_changed(&displays);
-                        }
+        // On the DRM/KMS capture path the PipeWire enumeration (which is what feeds
+        // `SYNC_DISPLAYS` via `check_update_displays`) is bypassed, so populate the sync list
+        // from the DRM display list here. Without this the display service broadcasts an empty
+        // list that overwrites the login peer-info displays and the client shows "No displays".
+        #[cfg(feature = "drm")]
+        if super::drm_capturer::is_available_cached() {
+            let synced = !SYNC_DISPLAYS.lock().unwrap().displays.is_empty();
+            let stamped_before = scrap::wayland::display::wayland_failure_stamped();
+            // With nothing published yet, even the unaugmented DRM list beats the empty
+            // broadcast below; with a synced layout, a suppressed turn keeps it instead.
+            if !synced || !scrap::wayland::display::wayland_lookup_suppressed() {
+                if let Some(displays) = super::drm_capturer::get_display_infos() {
+                    // A first failure keeps the synced layout for one backoff; only a
+                    // failure that persists across one replaces it with the DRM stack.
+                    if !synced
+                        || stamped_before
+                        || !scrap::wayland::display::wayland_lookup_suppressed()
+                    {
+                        SYNC_DISPLAYS.lock().unwrap().check_changed(&displays);
                     }
                 }
             }
-            return get_displays_msg();
         }
+        get_displays_msg()
     }
-    check_update_displays(&try_get_displays().ok()?);
-    get_displays_msg()
+    #[cfg(not(target_os = "linux"))]
+    {
+        check_update_displays(&try_get_displays().ok()?);
+        get_displays_msg()
+    }
 }
 
 pub fn check_displays_changed() -> ResultType<()> {
     #[cfg(target_os = "linux")]
-    {
-        // Currently, wayland need to call wayland::clear() before call Display::all(), otherwise it will cause
-        // block, or even crash here, https://github.com/rustdesk/rustdesk/blob/0bb4d43e9ea9d9dfb9c46c8d27d1a97cd0ad6bea/libs/scrap/src/wayland/pipewire.rs#L235
-        if !is_x11() {
-            return Ok(());
-        }
+    if !is_wayland_session_available() {
+        bail!("Screen capture requires an active Wayland session");
     }
+    // Linux publishes the active portal/DRM snapshot without re-enumerating PipeWire.
+    #[cfg(not(target_os = "linux"))]
     check_update_displays(&try_get_displays()?);
     Ok(())
 }
@@ -705,6 +707,10 @@ fn get_displays_msg() -> Option<Message> {
 }
 
 fn run(sp: EmptyExtraFieldService) -> ResultType<()> {
+    #[cfg(target_os = "linux")]
+    if !is_wayland_session_available() {
+        bail!("Screen capture requires an active Wayland session");
+    }
     while sp.ok() {
         sp.snapshot(|sps| {
             if !TEMP_IGNORE_DISPLAYS_CHANGED.load(Ordering::Relaxed) {
@@ -839,8 +845,7 @@ pub(super) fn update_sync_displays(all: &Vec<Display>) -> Vec<DisplayInfo> {
     // For compatibility: if only one display, scale remains 1.0 and we use the physical size for `uinput`.
     // If there are multiple displays, we use the logical size for `uinput` by setting scale to d.scale().
     #[cfg(target_os = "linux")]
-    let use_logical_scale = !is_x11()
-        && crate::is_server()
+    let use_logical_scale = crate::is_server()
         && wayland_has_compositor()
         && scrap::wayland::display::get_displays().displays.len() > 1;
     let displays = all
@@ -885,34 +890,41 @@ pub(super) fn update_sync_displays(all: &Vec<Display>) -> Vec<DisplayInfo> {
 
 pub fn is_inited_msg() -> Option<Message> {
     #[cfg(target_os = "linux")]
-    if !is_x11() {
-        return super::wayland::is_inited();
+    {
+        super::wayland::is_inited()
     }
-    None
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 // Return the primary index with the refreshed list so login cannot mix display snapshots.
 pub async fn update_get_sync_displays_on_login() -> ResultType<(Vec<DisplayInfo>, usize)> {
     #[cfg(target_os = "linux")]
     {
-        if !is_x11() {
-            let (displays, primary_display_idx) =
-                super::wayland::get_displays_and_primary().await?;
-            let primary_display_idx =
-                normalize_primary_display_idx(primary_display_idx, displays.len());
-            return Ok((displays, primary_display_idx));
+        if !is_wayland_session_available() {
+            bail!("Screen capture requires an active Wayland session");
         }
+        let (displays, primary_display_idx) =
+            super::wayland::get_displays_and_primary().await?;
+        let primary_display_idx =
+            normalize_primary_display_idx(primary_display_idx, displays.len());
+        Ok((displays, primary_display_idx))
     }
-    #[cfg(not(windows))]
-    let displays = display_service::try_get_displays();
-    #[cfg(windows)]
-    let displays = display_service::try_get_displays_add_amyuni_headless();
-    let displays = displays?;
-    let primary_display_idx = get_primary_2(&displays);
-    let sync_displays = update_sync_displays(&displays);
-    let primary_display_idx =
-        normalize_primary_display_idx(primary_display_idx, sync_displays.len());
-    Ok((sync_displays, primary_display_idx))
+    #[cfg(not(target_os = "linux"))]
+    {
+        #[cfg(not(windows))]
+        let displays = display_service::try_get_displays();
+        #[cfg(windows)]
+        let displays = display_service::try_get_displays_add_amyuni_headless();
+        let displays = displays?;
+        let primary_display_idx = get_primary_2(&displays);
+        let sync_displays = update_sync_displays(&displays);
+        let primary_display_idx =
+            normalize_primary_display_idx(primary_display_idx, sync_displays.len());
+        Ok((sync_displays, primary_display_idx))
+    }
 }
 
 #[inline]

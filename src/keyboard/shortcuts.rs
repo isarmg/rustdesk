@@ -26,7 +26,6 @@ pub mod action_id {
     pub const INSERT_LOCK: &str          = "insert_lock";
     pub const REFRESH: &str              = "refresh";
     pub const TOGGLE_BLOCK_INPUT: &str   = "toggle_block_input";
-    pub const TOGGLE_RECORDING: &str     = "toggle_recording";
     pub const SWITCH_SIDES: &str         = "switch_sides";
     pub const CLOSE_TAB: &str            = "close_tab";
     pub const TOGGLE_TOOLBAR: &str       = "toggle_toolbar";
@@ -36,7 +35,6 @@ pub mod action_id {
     pub const PIN_TOOLBAR: &str          = "pin_toolbar";
     pub const VIEW_MODE_ORIGINAL: &str   = "view_mode_original";
     pub const VIEW_MODE_ADAPTIVE: &str   = "view_mode_adaptive";
-    pub const TOGGLE_CHAT: &str               = "toggle_chat";
     pub const TOGGLE_QUALITY_MONITOR: &str    = "toggle_quality_monitor";
     pub const TOGGLE_SHOW_REMOTE_CURSOR: &str = "toggle_show_remote_cursor";
     pub const TOGGLE_SHOW_MY_CURSOR: &str     = "toggle_show_my_cursor";
@@ -62,7 +60,6 @@ pub mod action_id {
     pub const TOGGLE_LOCK_AFTER_SESSION_END: &str = "toggle_lock_after_session_end";
     pub const TOGGLE_TRUE_COLOR: &str         = "toggle_true_color";
     pub const TOGGLE_SWAP_CTRL_CMD: &str      = "toggle_swap_ctrl_cmd";
-    pub const TOGGLE_ENABLE_FILE_COPY_PASTE: &str = "toggle_enable_file_copy_paste";
     pub const VIEW_MODE_CUSTOM: &str          = "view_mode_custom";
     pub const IMAGE_QUALITY_BEST: &str        = "image_quality_best";
     pub const IMAGE_QUALITY_BALANCED: &str    = "image_quality_balanced";
@@ -70,7 +67,6 @@ pub mod action_id {
     pub const SEND_CLIPBOARD_KEYSTROKES: &str = "send_clipboard_keystrokes";
     pub const SWITCH_TAB_NEXT: &str           = "switch_tab_next";
     pub const SWITCH_TAB_PREV: &str           = "switch_tab_prev";
-    pub const TOGGLE_VOICE_CALL: &str         = "toggle_voice_call";
     pub const TOGGLE_VIEW_ONLY: &str          = "toggle_view_only";
 }
 
@@ -106,7 +102,7 @@ pub struct Bindings {
 
 pub fn default_bindings() -> Vec<Binding> {
     let prefix = || vec![Modifier::Primary, Modifier::Alt, Modifier::Shift];
-    // Defaults align with AnyDesk's M/S/I/C/Delete/Arrow/Digit conventions
+    // Defaults align with AnyDesk's M/S/I/Delete/Arrow/Digit conventions
     // where applicable; "P" for screenshot also matches AnyDesk.
     vec![
         Binding { action: action_id::SEND_CTRL_ALT_DEL.into(),         mods: prefix(), key: "delete".into() },
@@ -117,7 +113,6 @@ pub fn default_bindings() -> Vec<Binding> {
         Binding { action: action_id::TOGGLE_SHOW_REMOTE_CURSOR.into(), mods: prefix(), key: "m".into() },
         Binding { action: action_id::TOGGLE_MUTE.into(),               mods: prefix(), key: "s".into() },
         Binding { action: action_id::TOGGLE_BLOCK_INPUT.into(),        mods: prefix(), key: "i".into() },
-        Binding { action: action_id::TOGGLE_CHAT.into(),               mods: prefix(), key: "c".into() },
     ]
 }
 
@@ -288,11 +283,13 @@ fn action_available_on_platform(action: &str, platform: &str, is_wayland: bool) 
         action_id::TOGGLE_FULLSCREEN | action_id::SCREENSHOT | action_id::SWITCH_TAB_NEXT
         | action_id::SWITCH_TAB_PREV | action_id::CLOSE_TAB | action_id::SWITCH_SIDES
         | action_id::TOGGLE_TOOLBAR | action_id::PIN_TOOLBAR | action_id::SWITCH_DISPLAY_ALL
-        | action_id::TOGGLE_ENABLE_FILE_COPY_PASTE | action_id::KEYBOARD_MODE_MAP
+        | action_id::KEYBOARD_MODE_MAP
         | action_id::KEYBOARD_MODE_TRANSLATE | action_id::KEYBOARD_MODE_LEGACY
         | action_id::TOGGLE_SHOW_MY_CURSOR | action_id::TOGGLE_ZOOM_CURSOR => !mobile,
         action_id::RESET_CANVAS => mobile,
-        action_id::TOGGLE_RECORDING | action_id::TOGGLE_VOICE_CALL => platform != "ios",
+        // Ignore bindings persisted by versions with removed session features.
+        "toggle_chat" | "toggle_voice_call" | "toggle_recording"
+        | "toggle_enable_file_copy_paste" => false,
         _ => true,
     }
 }
@@ -391,7 +388,6 @@ const RELEASE_ACTION_IDS: &[&str] = &[
     action_id::SWITCH_TAB_PREV,
     action_id::RESTART_REMOTE,
     action_id::SWITCH_SIDES,
-    action_id::TOGGLE_CHAT,
 ];
 
 pub fn runs_on_release(action_id: &str) -> bool {
@@ -972,7 +968,6 @@ mod tests {
         let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let actions = [action_id::SWITCH_DISPLAY_ALL, action_id::KEYBOARD_MODE_MAP,
             action_id::TOGGLE_SHOW_MY_CURSOR, action_id::TOGGLE_ZOOM_CURSOR,
-            action_id::TOGGLE_RECORDING, action_id::TOGGLE_VOICE_CALL,
             action_id::RESET_CANVAS, action_id::TOGGLE_MUTE, action_id::SEND_CTRL_ALT_DEL];
         let saved = Bindings { enabled: true, pass_through: false,
             bindings: actions.iter().map(|action| Binding {
@@ -980,8 +975,7 @@ mod tests {
             }).collect() };
         let raw = serde_json::to_string(&saved).unwrap();
         for (platform, expected) in [
-            ("android", vec![action_id::TOGGLE_RECORDING, action_id::TOGGLE_VOICE_CALL,
-                action_id::RESET_CANVAS, action_id::TOGGLE_MUTE, action_id::SEND_CTRL_ALT_DEL]),
+            ("android", vec![action_id::RESET_CANVAS, action_id::TOGGLE_MUTE, action_id::SEND_CTRL_ALT_DEL]),
             ("ios", vec![action_id::RESET_CANVAS, action_id::TOGGLE_MUTE, action_id::SEND_CTRL_ALT_DEL]),
             ("macos", actions.iter().copied().filter(|a| *a != action_id::RESET_CANVAS).collect()),
         ] {
@@ -990,6 +984,20 @@ mod tests {
             assert_eq!(active.bindings.iter().map(|b| b.action.as_str()).collect::<Vec<_>>(), expected, "{platform}");
         }
         assert_eq!(serde_json::from_str::<Bindings>(&raw).unwrap(), saved);
+    }
+
+    #[test]
+    fn removed_saved_actions_do_not_consume_shortcuts() {
+        let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for action in ["toggle_chat", "toggle_voice_call", "toggle_recording",
+            "toggle_enable_file_copy_paste"] {
+            let saved = Bindings { enabled: true, pass_through: false,
+                bindings: vec![Binding {
+                    action: action.into(), mods: vec![Modifier::Primary], key: "c".into(),
+                }] };
+            reload_from_raw(&serde_json::to_string(&saved).unwrap(), "linux", true);
+            assert_eq!(match_normalized("c", &[Modifier::Primary], &current()), None);
+        }
     }
 
     #[cfg(feature = "flutter")]
@@ -1010,6 +1018,13 @@ mod tests {
 
         let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let chord = enable_defaults_and_hold_chord();
+        let mut bindings = current().as_ref().clone();
+        bindings.bindings.push(Binding {
+            action: action_id::CLOSE_TAB.into(),
+            mods: vec![Modifier::Primary, Modifier::Alt, Modifier::Shift],
+            key: "c".into(),
+        });
+        *CACHE.write().unwrap() = Arc::new(bindings);
         // Records the action of every press that dispatched: a press whose key
         // was not already fired before the call.
         let fired = std::cell::RefCell::new(Vec::new());
@@ -1039,7 +1054,7 @@ mod tests {
         assert!(fired_keys().is_empty());
         assert_eq!(
             *fired.borrow(),
-            vec![action_id::SCREENSHOT.to_owned(), action_id::TOGGLE_CHAT.to_owned()]
+            vec![action_id::SCREENSHOT.to_owned(), action_id::CLOSE_TAB.to_owned()]
         );
 
         release_chord(chord);
@@ -1179,7 +1194,7 @@ mod tests {
         use rdev::Key;
 
         let _guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for action in [action_id::TOGGLE_MUTE, action_id::TOGGLE_CHAT,
+        for action in [action_id::TOGGLE_MUTE, action_id::CLOSE_TAB,
             action_id::TOGGLE_VIEW_ONLY, action_id::TOGGLE_SHOW_MY_CURSOR,
             action_id::INSERT_LOCK, action_id::SEND_CTRL_ALT_DEL,
             action_id::KEYBOARD_MODE_MAP, action_id::KEYBOARD_MODE_TRANSLATE,
@@ -1428,12 +1443,12 @@ mod tests {
             Some(&SID_A), &make_press(Key::KeyP), "map", || "windows".into(), |_| {}
         ));
         enter_view_only(&SID_A);
-        let action = match_event(&make_press(Key::KeyC));
+        let action = match_event(&make_press(Key::KeyS));
         let fired = fired_keys().contains(&Key::KeyP);
         super::super::IS_RDEV_ENABLED.store(previous, Ordering::SeqCst);
         release_chord(chord);
         clear_session_state(&SID_A);
-        assert_eq!(action.as_deref(), Some(action_id::TOGGLE_CHAT));
+        assert_eq!(action.as_deref(), Some(action_id::TOGGLE_MUTE));
         assert!(fired, "rdev still receives the held shortcut key's release");
     }
 
@@ -1450,7 +1465,7 @@ mod tests {
             Some(&SID_A), &make_press(Key::KeyP), "map", || "windows".into(), |_| {}
         ));
         clear_session_state(&SID_B);
-        assert_eq!(match_event(&make_press(Key::KeyC)).as_deref(), Some(action_id::TOGGLE_CHAT));
+        assert_eq!(match_event(&make_press(Key::KeyS)).as_deref(), Some(action_id::TOGGLE_MUTE));
         enter_view_only(&SID_A);
         super::super::IS_RDEV_ENABLED.store(previous, Ordering::SeqCst);
         assert!(fired_keys().is_empty());

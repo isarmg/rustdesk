@@ -124,11 +124,7 @@ pub fn global_init() -> bool {
     #[cfg(all(target_os = "linux", feature = "drm"))]
     crate::platform::linux::dispatch_wayland_display_probe();
     #[cfg(target_os = "linux")]
-    {
-        if !crate::platform::linux::is_x11() {
-            crate::server::wayland::init();
-        }
-    }
+    crate::server::wayland::init();
     true
 }
 
@@ -168,26 +164,6 @@ pub fn cursor_content_id(width: i32, height: i32, hotx: i32, hoty: i32, colors: 
 }
 
 #[inline]
-#[cfg(feature = "unix-file-copy-paste")]
-pub fn is_support_file_copy_paste(ver: &str) -> bool {
-    is_support_file_copy_paste_num(hbb_common::get_version_number(ver))
-}
-
-#[inline]
-#[cfg(feature = "unix-file-copy-paste")]
-pub fn is_support_file_copy_paste_num(ver: i64) -> bool {
-    ver >= hbb_common::get_version_number("1.3.8")
-}
-
-pub fn is_support_remote_print(ver: &str) -> bool {
-    hbb_common::get_version_number(ver) >= hbb_common::get_version_number("1.3.9")
-}
-
-pub fn is_support_file_paste_if_macos(ver: &str) -> bool {
-    hbb_common::get_version_number(ver) >= hbb_common::get_version_number("1.3.9")
-}
-
-#[inline]
 pub fn is_support_screenshot(ver: &str) -> bool {
     is_support_multi_ui_session_num(hbb_common::get_version_number(ver))
 }
@@ -195,16 +171,6 @@ pub fn is_support_screenshot(ver: &str) -> bool {
 #[inline]
 pub fn is_support_screenshot_num(ver: i64) -> bool {
     ver >= hbb_common::get_version_number("1.4.0")
-}
-
-#[inline]
-pub fn is_support_file_transfer_resume(ver: &str) -> bool {
-    is_support_file_transfer_resume_num(hbb_common::get_version_number(ver))
-}
-
-#[inline]
-pub fn is_support_file_transfer_resume_num(ver: i64) -> bool {
-    ver >= hbb_common::get_version_number("1.4.2")
 }
 
 /// Minimum server version required for relative mouse mode support.
@@ -225,73 +191,6 @@ pub fn is_support_relative_mouse_mode_num(ver: i64) -> bool {
 #[inline]
 pub fn is_server() -> bool {
     *IS_SERVER
-}
-
-#[inline]
-pub fn need_fs_cm_send_files() -> bool {
-    #[cfg(windows)]
-    {
-        is_server()
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
-}
-
-/// Android is scoped-storage only: the peer may never touch anything outside the app
-/// workspace (`Config::get_home()`, i.e. the app-specific external files directory).
-///
-/// Every peer supplied path must be validated with this before it reaches the
-/// filesystem, for reads, writes, renames, creations and deletions alike. The path is
-/// resolved to its canonical form (of the deepest existing ancestor, so paths that are
-/// about to be created are handled too) so symlinks cannot escape the workspace.
-///
-/// Only the `ReadDir` protocol action treats an empty path as the home directory.
-/// Callers must opt in to that protocol-specific behavior with `allow_empty`.
-#[cfg(target_os = "android")]
-pub fn is_peer_path_allowed(path: &str, allow_empty: bool) -> bool {
-    use std::path::{Component, Path, PathBuf};
-
-    // Canonicalize the deepest existing ancestor and re-append the missing tail.
-    fn resolve(path: &Path) -> Option<PathBuf> {
-        let mut tail: Vec<std::ffi::OsString> = Vec::new();
-        let mut base = path.to_path_buf();
-        loop {
-            if let Ok(mut resolved) = base.canonicalize() {
-                while let Some(component) = tail.pop() {
-                    resolved.push(component);
-                }
-                return Some(resolved);
-            }
-            tail.push(base.file_name()?.to_os_string());
-            if !base.pop() {
-                return None;
-            }
-        }
-    }
-
-    if path.is_empty() {
-        return allow_empty;
-    }
-    let path = Path::new(path);
-    // `..` is never needed by the protocol and would defeat the prefix check below.
-    if !path.is_absolute() || path.components().any(|c| c == Component::ParentDir) {
-        return false;
-    }
-    let home = Config::get_home();
-    let home = home.canonicalize().unwrap_or(home);
-    if home.as_os_str().is_empty() {
-        return false;
-    }
-    // `Path::starts_with` compares whole components, and is true for equal paths.
-    resolve(path).map_or(false, |target| target.starts_with(&home))
-}
-
-#[inline]
-#[cfg(not(target_os = "android"))]
-pub fn is_peer_path_allowed(_path: &str, _allow_empty: bool) -> bool {
-    true
 }
 
 #[inline]
@@ -2030,54 +1929,6 @@ pub fn get_supported_keyboard_modes(version: i64, peer_platform: &str) -> Vec<Ke
         .collect::<Vec<_>>()
 }
 
-pub fn make_fd_to_json(id: i32, path: String, entries: &Vec<FileEntry>) -> String {
-    let fd_json = _make_fd_to_json(id, path, entries);
-    serde_json::to_string(&fd_json).unwrap_or("".into())
-}
-
-pub fn _make_fd_to_json(id: i32, path: String, entries: &Vec<FileEntry>) -> Map<String, Value> {
-    let mut fd_json = serde_json::Map::new();
-    fd_json.insert("id".into(), json!(id));
-    fd_json.insert("path".into(), json!(path));
-
-    let mut entries_out = vec![];
-    for entry in entries {
-        let mut entry_map = serde_json::Map::new();
-        entry_map.insert("entry_type".into(), json!(entry.entry_type.value()));
-        entry_map.insert("name".into(), json!(entry.name));
-        entry_map.insert("size".into(), json!(entry.size));
-        entry_map.insert("modified_time".into(), json!(entry.modified_time));
-        entries_out.push(entry_map);
-    }
-    fd_json.insert("entries".into(), json!(entries_out));
-    fd_json
-}
-
-pub fn make_vec_fd_to_json(fds: &[FileDirectory]) -> String {
-    let mut fd_jsons = vec![];
-
-    for fd in fds.iter() {
-        let fd_json = _make_fd_to_json(fd.id, fd.path.clone(), &fd.entries);
-        fd_jsons.push(fd_json);
-    }
-
-    serde_json::to_string(&fd_jsons).unwrap_or("".into())
-}
-
-pub fn make_empty_dirs_response_to_json(res: &ReadEmptyDirsResponse) -> String {
-    let mut map: Map<String, Value> = serde_json::Map::new();
-    map.insert("path".into(), json!(res.path));
-
-    let mut fd_jsons = vec![];
-
-    for fd in res.empty_dirs.iter() {
-        let fd_json = _make_fd_to_json(fd.id, fd.path.clone(), &fd.entries);
-        fd_jsons.push(fd_json);
-    }
-    map.insert("empty_dirs".into(), fd_jsons.into());
-
-    serde_json::to_string(&map).unwrap_or("".into())
-}
 
 /// The function to handle the url scheme sent by the system.
 ///

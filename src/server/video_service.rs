@@ -21,8 +21,6 @@
 use super::{display_service::check_display_changed, service::ServiceTmpl, video_qos::VideoQoS, *};
 #[cfg(target_os = "linux")]
 use crate::common::SimpleCallOnReturn;
-#[cfg(target_os = "linux")]
-use crate::platform::linux::is_x11;
 use crate::privacy_mode::{get_privacy_mode_conn_id, INVALID_PRIVACY_MODE_CONN_ID};
 #[cfg(windows)]
 use crate::{
@@ -30,14 +28,7 @@ use crate::{
     privacy_mode::{is_current_privacy_mode_impl, PRIVACY_MODE_IMPL_WIN_MAG},
     ui_interface::is_installed,
 };
-use hbb_common::{
-    anyhow::anyhow,
-    config,
-    tokio::sync::{
-        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-        Mutex as TokioMutex,
-    },
-};
+use hbb_common::anyhow::anyhow;
 #[cfg(feature = "hwcodec")]
 use scrap::hwcodec::{HwRamEncoder, HwRamEncoderConfig};
 #[cfg(feature = "vram")]
@@ -47,7 +38,6 @@ use scrap::Capturer;
 use scrap::{
     aom::AomEncoderConfig,
     codec::{Encoder, EncoderCfg},
-    record::{Recorder, RecorderContext},
     vpxcodec::{VpxEncoderConfig, VpxVideoCodecId},
     CodecFormat, Display, EncodeInput, TraitCapturer, TraitPixelBuffer,
 };
@@ -59,6 +49,7 @@ use std::{
     collections::HashSet,
     io::ErrorKind::WouldBlock,
     ops::{Deref, DerefMut},
+    sync::mpsc,
     time::{self, Duration, Instant},
 };
 
@@ -117,8 +108,8 @@ impl DxgiRecoveryState {
     }
 }
 
-type FrameFetchedNotifierSender = UnboundedSender<(i32, Option<Instant>)>;
-type FrameFetchedNotifierReceiver = Arc<TokioMutex<UnboundedReceiver<(i32, Option<Instant>)>>>;
+type FrameFetchedNotifierSender = mpsc::Sender<(i32, Option<Instant>)>;
+type FrameFetchedNotifierReceiver = Arc<Mutex<mpsc::Receiver<(i32, Option<Instant>)>>>;
 
 lazy_static::lazy_static! {
     static ref FRAME_FETCHED_NOTIFIERS: Mutex<HashMap<usize, (FrameFetchedNotifierSender, FrameFetchedNotifierReceiver)>> = Mutex::new(HashMap::default());
@@ -201,8 +192,7 @@ impl VideoFrameController {
         }
     }
 
-    #[tokio::main(flavor = "current_thread")]
-    async fn try_wait_next(&mut self, fetched_conn_ids: &mut HashSet<i32>, timeout_millis: u64) {
+    fn try_wait_next(&mut self, fetched_conn_ids: &mut HashSet<i32>, timeout_millis: u64) {
         if self.send_conn_ids.is_empty() {
             return;
         }
@@ -220,29 +210,16 @@ impl VideoFrameController {
                 }
             }
         };
-        let mut receiver_guard = receiver.lock().await;
-        match tokio::time::timeout(timeout_dur, receiver_guard.recv()).await {
-            Err(_) => {
-                // break if timeout
-                // log::error!("blocking wait frame receiving timeout {}", timeout_millis);
+        let receiver_guard = receiver.lock().unwrap();
+        let first = match receiver_guard.recv_timeout(timeout_dur) {
+            Ok(notification) => Some(notification),
+            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => None,
+        };
+        for (id, instant) in first.into_iter().chain(receiver_guard.try_iter()) {
+            if let Some(tm) = instant {
+                log::trace!("Channel recv latency: {}", tm.elapsed().as_secs_f32());
             }
-            Ok(Some((id, instant))) => {
-                if let Some(tm) = instant {
-                    log::trace!("Channel recv latency: {}", tm.elapsed().as_secs_f32());
-                }
-                fetched_conn_ids.insert(id);
-            }
-            Ok(None) => {
-                // this branch would never be reached
-            }
-        }
-        while !receiver_guard.is_empty() {
-            if let Some((id, instant)) = receiver_guard.recv().await {
-                if let Some(tm) = instant {
-                    log::trace!("Channel recv latency: {}", tm.elapsed().as_secs_f32());
-                }
-                fetched_conn_ids.insert(id);
-            }
+            fetched_conn_ids.insert(id);
         }
     }
 }
@@ -250,23 +227,17 @@ impl VideoFrameController {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum VideoSource {
     Monitor,
-    Camera,
 }
 
 impl VideoSource {
     pub fn service_name_prefix(&self) -> &'static str {
         match self {
             VideoSource::Monitor => "monitor",
-            VideoSource::Camera => "camera",
         }
     }
 
     pub fn is_monitor(&self) -> bool {
         matches!(self, VideoSource::Monitor)
-    }
-
-    pub fn is_camera(&self) -> bool {
-        matches!(self, VideoSource::Camera)
     }
 }
 
@@ -303,8 +274,8 @@ pub fn new(source: VideoSource, idx: usize) -> GenericService {
         .unwrap()
         .entry(idx)
         .or_insert_with(|| {
-            let (tx, rx) = unbounded_channel();
-            (tx, Arc::new(TokioMutex::new(rx)))
+            let (tx, rx) = mpsc::channel();
+            (tx, Arc::new(Mutex::new(rx)))
         });
     let vs = VideoService {
         sp: GenericService::new(get_service_name(source, idx), true),
@@ -447,17 +418,19 @@ impl DerefMut for CapturerInfo {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn get_capturer_monitor(
+    current: usize,
+    _portable_service_running: bool,
+) -> ResultType<CapturerInfo> {
+    super::wayland::get_capturer_for_display(current)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn get_capturer_monitor(
     current: usize,
     portable_service_running: bool,
 ) -> ResultType<CapturerInfo> {
-    #[cfg(target_os = "linux")]
-    {
-        if !is_x11() {
-            return super::wayland::get_capturer_for_display(current);
-        }
-    }
-
     let mut displays = Display::all()?;
     let ndisplay = displays.len();
     if ndisplay <= current {
@@ -469,16 +442,6 @@ fn get_capturer_monitor(
     }
 
     let display = displays.remove(current);
-
-    #[cfg(target_os = "linux")]
-    if let Display::X11(inner) = &display {
-        if let Err(err) = inner.get_shm_status() {
-            log::warn!(
-                "MIT-SHM extension not working properly on select X11 server: {:?}",
-                err
-            );
-        }
-    }
 
     let (origin, width, height) = (display.origin(), display.width(), display.height());
     let name = display.name();
@@ -541,46 +504,6 @@ fn get_capturer_monitor(
     })
 }
 
-fn get_capturer_camera(current: usize) -> ResultType<CapturerInfo> {
-    let cameras = camera::Cameras::get_sync_cameras();
-    let ncamera = cameras.len();
-    if ncamera <= current {
-        bail!("Failed to get camera {}, cameras len: {}", current, ncamera,);
-    }
-    let Some(camera) = cameras.get(current) else {
-        bail!(
-            "Camera of index {} doesn't exist or platform not supported",
-            current
-        );
-    };
-    let capturer = camera::Cameras::get_capturer(current)?;
-    let (width, height) = (camera.width as usize, camera.height as usize);
-    let origin = (camera.x as i32, camera.y as i32);
-    let name = &camera.name;
-    let privacy_mode_id = get_privacy_mode_conn_id().unwrap_or(INVALID_PRIVACY_MODE_CONN_ID);
-    let _capturer_privacy_mode_id = privacy_mode_id;
-    log::debug!(
-        "#cameras={}, current={}, origin: {:?}, width={}, height={}, cpus={}/{}, name:{}",
-        ncamera,
-        current,
-        &origin,
-        width,
-        height,
-        num_cpus::get_physical(),
-        num_cpus::get(),
-        name,
-    );
-    return Ok(CapturerInfo {
-        origin,
-        width,
-        height,
-        ndisplay: ncamera,
-        current,
-        privacy_mode_id,
-        _capturer_privacy_mode_id: privacy_mode_id,
-        capturer,
-    });
-}
 fn get_capturer(
     source: VideoSource,
     current: usize,
@@ -588,7 +511,6 @@ fn get_capturer(
 ) -> ResultType<CapturerInfo> {
     match source {
         VideoSource::Monitor => get_capturer_monitor(current, portable_service_running),
-        VideoSource::Camera => get_capturer_camera(current),
     }
 }
 
@@ -650,21 +572,12 @@ fn run(vs: VideoService) -> ResultType<()> {
     let mut video_qos = VIDEO_QOS.lock().unwrap();
     let mut spf = video_qos.spf();
     let mut quality = video_qos.ratio();
-    let record_incoming = config::option2bool(
-        "allow-auto-record-incoming",
-        &Config::get_option("allow-auto-record-incoming"),
-    );
-    let client_record = video_qos.record();
     drop(video_qos);
-    let (mut encoder, encoder_cfg, codec_format, use_i444, recorder) = match setup_encoder(
+    let (mut encoder, encoder_cfg, codec_format, use_i444) = match setup_encoder(
         &c,
         sp.name(),
         quality,
-        client_record,
-        record_incoming,
         last_portable_service_running,
-        vs.source,
-        display_idx,
     ) {
         Ok(result) => result,
         Err(err) => {
@@ -680,11 +593,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                 &c,
                 sp.name(),
                 quality,
-                client_record,
-                record_incoming,
                 last_portable_service_running,
-                vs.source,
-                display_idx,
             )?
         }
     };
@@ -719,8 +628,6 @@ fn run(vs: VideoService) -> ResultType<()> {
     #[cfg(windows)]
     start_uac_elevation_check();
 
-    #[cfg(target_os = "linux")]
-    let mut would_block_count = 0u32;
     let mut yuv = Vec::new();
     let mut mid_data = Vec::new();
     let mut repeat_encode_counter = 0;
@@ -729,8 +636,6 @@ fn run(vs: VideoService) -> ResultType<()> {
     let mut first_frame = true;
     // Set once the encoder emits its first packet; until then it may legitimately return nothing.
     let mut encoder_warmed_up = false;
-    let capture_width = c.width;
-    let capture_height = c.height;
     let (mut second_instant, mut send_counter) = (Instant::now(), 0);
 
     while sp.ok() {
@@ -740,7 +645,6 @@ fn run(vs: VideoService) -> ResultType<()> {
             &mut encoder,
             &mut quality,
             &mut spf,
-            client_record,
             &mut send_counter,
             &mut second_instant,
             &sp.name(),
@@ -861,12 +765,9 @@ fn run(vs: VideoService) -> ResultType<()> {
                         frame,
                         ms,
                         &mut encoder,
-                        recorder.clone(),
                         &mut encode_fail_counter,
                         &mut first_frame,
                         &mut encoder_warmed_up,
-                        capture_width,
-                        capture_height,
                     )?;
                     frame_controller.set_send(now, send_conn_ids);
                     send_counter += 1;
@@ -900,22 +801,6 @@ fn run(vs: VideoService) -> ResultType<()> {
                         try_gdi += 1;
                     }
                 }
-                #[cfg(target_os = "linux")]
-                {
-                    would_block_count += 1;
-                    if !is_x11() {
-                        if would_block_count >= 100 {
-                            // to-do: Unknown reason for WouldBlock 100 times (seconds = 100 * 1 / fps)
-                            // https://github.com/rustdesk/rustdesk/blob/63e6b2f8ab51743e77a151e2b7ff18816f5fa2fb/libs/scrap/src/common/wayland.rs#L81
-                            //
-                            // Do not reset the capturer for now, as it will cause the prompt to show every few minutes.
-                            // https://github.com/rustdesk/rustdesk/issues/4276
-                            //
-                            // super::wayland::clear();
-                            // bail!("Wayland capturer none 100 times, try restart capture");
-                        }
-                    }
-                }
                 if !encoder.latency_free() && yuv.len() > 0 {
                     // yun.len() > 0 means the frame is not texture.
                     if repeat_encode_counter < repeat_encode_max {
@@ -926,12 +811,9 @@ fn run(vs: VideoService) -> ResultType<()> {
                             EncodeInput::YUV(&yuv),
                             ms,
                             &mut encoder,
-                            recorder.clone(),
                             &mut encode_fail_counter,
                             &mut first_frame,
                             &mut encoder_warmed_up,
-                            capture_width,
-                            capture_height,
                         )?;
                         frame_controller.set_send(now, send_conn_ids);
                         send_counter += 1;
@@ -973,12 +855,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                 }
                 return Err(err.into());
             }
-            _ => {
-                #[cfg(target_os = "linux")]
-                {
-                    would_block_count = 0;
-                }
-            }
+            _ => {}
         }
 
         let mut fetched_conn_ids = HashSet::new();
@@ -1043,51 +920,34 @@ fn setup_encoder(
     c: &CapturerInfo,
     name: String,
     quality: f32,
-    client_record: bool,
-    record_incoming: bool,
     last_portable_service_running: bool,
-    source: VideoSource,
-    display_idx: usize,
-) -> ResultType<(
-    Encoder,
-    EncoderCfg,
-    CodecFormat,
-    bool,
-    Arc<Mutex<Option<Recorder>>>,
-)> {
+) -> ResultType<(Encoder, EncoderCfg, CodecFormat, bool)> {
     let encoder_cfg = get_encoder_config(
         &c,
         name.to_string(),
         quality,
-        client_record || record_incoming,
         last_portable_service_running,
-        source,
     );
     Encoder::set_fallback(&encoder_cfg);
     let codec_format = Encoder::negotiated_codec();
-    let recorder = get_recorder(record_incoming, display_idx, source == VideoSource::Camera);
     let use_i444 = Encoder::use_i444(&encoder_cfg);
     let encoder = Encoder::new(encoder_cfg.clone(), use_i444)?;
-    Ok((encoder, encoder_cfg, codec_format, use_i444, recorder))
+    Ok((encoder, encoder_cfg, codec_format, use_i444))
 }
 
 fn get_encoder_config(
     c: &CapturerInfo,
     _name: String,
     quality: f32,
-    record: bool,
     _portable_service: bool,
-    _source: VideoSource,
 ) -> EncoderCfg {
     #[cfg(all(windows, feature = "vram"))]
-    if _portable_service || c.is_gdi() || _source == VideoSource::Camera {
+    if _portable_service || c.is_gdi() {
         log::info!("gdi:{}, portable:{}", c.is_gdi(), _portable_service);
         VRamEncoder::set_not_use(_name, true);
     }
     #[cfg(feature = "vram")]
     Encoder::update(scrap::codec::EncodingUpdate::Check);
-    // https://www.wowza.com/community/t/the-correct-keyframe-interval-in-obs-studio/95162
-    let keyframe_interval = if record { Some(240) } else { None };
     let negotiated_codec = Encoder::negotiated_codec();
     match negotiated_codec {
         CodecFormat::H264 | CodecFormat::H265 => {
@@ -1099,7 +959,7 @@ fn get_encoder_config(
                     height: c.height,
                     quality,
                     feature,
-                    keyframe_interval,
+                    keyframe_interval: None,
                 });
             }
             #[cfg(feature = "hwcodec")]
@@ -1110,7 +970,7 @@ fn get_encoder_config(
                     width: c.width,
                     height: c.height,
                     quality,
-                    keyframe_interval,
+                    keyframe_interval: None,
                 });
             }
             EncoderCfg::VPX(VpxEncoderConfig {
@@ -1118,7 +978,7 @@ fn get_encoder_config(
                 height: c.height as _,
                 quality,
                 codec: VpxVideoCodecId::VP9,
-                keyframe_interval,
+                keyframe_interval: None,
             })
         }
         format @ (CodecFormat::VP8 | CodecFormat::VP9) => EncoderCfg::VPX(VpxEncoderConfig {
@@ -1130,57 +990,22 @@ fn get_encoder_config(
             } else {
                 VpxVideoCodecId::VP9
             },
-            keyframe_interval,
+            keyframe_interval: None,
         }),
         CodecFormat::AV1 => EncoderCfg::AOM(AomEncoderConfig {
             width: c.width as _,
             height: c.height as _,
             quality,
-            keyframe_interval,
+            keyframe_interval: None,
         }),
         _ => EncoderCfg::VPX(VpxEncoderConfig {
             width: c.width as _,
             height: c.height as _,
             quality,
             codec: VpxVideoCodecId::VP9,
-            keyframe_interval,
+            keyframe_interval: None,
         }),
     }
-}
-
-fn get_recorder(
-    record_incoming: bool,
-    display_idx: usize,
-    camera: bool,
-) -> Arc<Mutex<Option<Recorder>>> {
-    #[cfg(windows)]
-    let root = crate::platform::is_root();
-    #[cfg(not(windows))]
-    let root = false;
-    let recorder = if record_incoming {
-        use crate::hbbs_http::record_upload;
-
-        let tx = if record_upload::is_enable() {
-            let (tx, rx) = std::sync::mpsc::channel();
-            record_upload::run(rx);
-            Some(tx)
-        } else {
-            None
-        };
-        Recorder::new(RecorderContext {
-            server: true,
-            id: Config::get_id(),
-            dir: crate::ui_interface::video_save_directory(root),
-            display_idx,
-            camera,
-            tx,
-        })
-        .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))))
-    } else {
-        Default::default()
-    };
-
-    recorder
 }
 
 #[cfg(target_os = "android")]
@@ -1255,12 +1080,9 @@ fn handle_one_frame(
     frame: EncodeInput,
     ms: i64,
     encoder: &mut Encoder,
-    recorder: Arc<Mutex<Option<Recorder>>>,
     encode_fail_counter: &mut usize,
     first_frame: &mut bool,
     encoder_warmed_up: &mut bool,
-    width: usize,
-    height: usize,
 ) -> ResultType<HashSet<i32>> {
     sp.snapshot(|sps| {
         // so that new sub and old sub share the same encoder after switch
@@ -1281,11 +1103,6 @@ fn handle_one_frame(
             vf.display = display as _;
             let mut msg = Message::new();
             msg.set_video_frame(vf);
-            recorder
-                .lock()
-                .unwrap()
-                .as_mut()
-                .map(|r| r.write_message(&msg, width, height));
             send_conn_ids = sp.send_video_frame(msg);
         }
         Err(e) => {
@@ -1390,9 +1207,6 @@ pub fn make_display_changed_msg(
         Some(d) => d,
         None => match source {
             VideoSource::Monitor => display_service::get_display_info(display_idx)?,
-            VideoSource::Camera => camera::Cameras::get_sync_cameras()
-                .get(display_idx)?
-                .clone(),
         },
     };
     let mut misc = Misc::new();
@@ -1404,7 +1218,6 @@ pub fn make_display_changed_msg(
         height: display.height,
         cursor_embedded: match source {
             VideoSource::Monitor => display_service::capture_cursor_embedded(),
-            VideoSource::Camera => false,
         },
         #[cfg(not(target_os = "android"))]
         resolutions: Some(SupportedResolutions {
@@ -1416,10 +1229,6 @@ pub fn make_display_changed_msg(
                         crate::platform::resolutions(&display.name)
                     }
                 }
-                VideoSource::Camera => camera::Cameras::get_camera_resolution(display_idx)
-                    .ok()
-                    .into_iter()
-                    .collect(),
             },
             ..SupportedResolutions::default()
         })
@@ -1436,7 +1245,6 @@ fn check_qos(
     encoder: &mut Encoder,
     ratio: &mut f32,
     spf: &mut Duration,
-    client_record: bool,
     send_counter: &mut usize,
     second_instant: &mut Instant,
     name: &str,
@@ -1455,10 +1263,6 @@ fn check_qos(
                 bail!("SWITCH");
             }
         }
-    }
-    if client_record != video_qos.record() {
-        log::info!("switch due to record changed");
-        bail!("SWITCH");
     }
     if second_instant.elapsed() > Duration::from_secs(1) {
         *second_instant = Instant::now();
@@ -1545,7 +1349,56 @@ fn handle_screenshot(screenshot: Screenshot, msg: String, w: usize, h: usize, da
 
 #[cfg(test)]
 mod tests {
-    use super::refresh_allowed;
+    use super::{refresh_allowed, VideoFrameController, FRAME_FETCHED_NOTIFIERS};
+    use hbb_common::tokio;
+    use std::{
+        collections::HashSet,
+        sync::{mpsc, Arc, Mutex},
+        time::{Duration, Instant},
+    };
+
+    #[tokio::test]
+    async fn frame_notifications_drain_without_creating_a_runtime() {
+        let idx = usize::MAX;
+        let (tx, rx) = mpsc::channel();
+        FRAME_FETCHED_NOTIFIERS
+            .lock()
+            .unwrap()
+            .insert(idx, (tx.clone(), Arc::new(Mutex::new(rx))));
+        let mut controller = VideoFrameController::new(idx);
+        controller.send_conn_ids.extend([1, 2]);
+        for id in [1, 1, 2, 99] {
+            tx.send((id, Some(Instant::now() - Duration::from_secs(1))))
+                .unwrap();
+        }
+        let mut fetched = HashSet::new();
+        controller.try_wait_next(&mut fetched, 0);
+        FRAME_FETCHED_NOTIFIERS.lock().unwrap().remove(&idx);
+        assert_eq!(fetched, HashSet::from([1, 2, 99]));
+    }
+
+    #[test]
+    fn frame_notification_timeout_preserves_later_notifications() {
+        let idx = usize::MAX - 1;
+        let (tx, rx) = mpsc::channel();
+        FRAME_FETCHED_NOTIFIERS
+            .lock()
+            .unwrap()
+            .insert(idx, (tx.clone(), Arc::new(Mutex::new(rx))));
+        let mut controller = VideoFrameController::new(idx);
+        controller.send_conn_ids.insert(1);
+        let mut fetched = HashSet::new();
+        let started = Instant::now();
+        controller.try_wait_next(&mut fetched, 1);
+        assert!(started.elapsed() >= Duration::from_millis(1));
+        assert!(fetched.is_empty());
+        tx.send((1, None)).unwrap();
+        controller.try_wait_next(&mut fetched, 0);
+        controller.reset();
+        controller.try_wait_next(&mut fetched, 0);
+        FRAME_FETCHED_NOTIFIERS.lock().unwrap().remove(&idx);
+        assert_eq!(fetched, HashSet::from([1]));
+    }
 
     #[test]
     fn refresh_waits_for_hw_encoder_warmup() {

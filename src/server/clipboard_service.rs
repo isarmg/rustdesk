@@ -5,16 +5,9 @@ use crate::clipboard::clipboard_listener::{self, ClipboardEvent};
 pub use crate::clipboard::{ClipboardContext, ClipboardSide};
 pub use crate::clipboard::{CLIPBOARD_INTERVAL as INTERVAL, CLIPBOARD_NAME as NAME};
 #[cfg(windows)]
-use crate::ipc::{self, ClipboardFile, ClipboardNonFile, Data};
-#[cfg(feature = "unix-file-copy-paste")]
-pub use crate::{
-    clipboard::{check_clipboard_files, FILE_CLIPBOARD_NAME as FILE_NAME},
-    clipboard_file::unix_file_clip,
-};
+use crate::ipc::{self, ClipboardNonFile, Data};
 #[cfg(target_os = "android")]
 use base::config::keys;
-#[cfg(all(feature = "unix-file-copy-paste", target_os = "linux"))]
-use clipboard::platform::unix::fuse::{init_fuse_context, uninit_fuse_context};
 #[cfg(target_os = "android")]
 use hbb_common::config::option2bool;
 #[cfg(target_os = "android")]
@@ -52,20 +45,6 @@ pub fn new(name: String) -> GenericService {
 
 #[cfg(not(target_os = "android"))]
 fn run(sp: EmptyExtraFieldService) -> ResultType<()> {
-    #[cfg(all(feature = "unix-file-copy-paste", target_os = "linux"))]
-    let _fuse_call_on_ret = {
-        if sp.name() == FILE_NAME {
-            Some(init_fuse_context(false).map(|_| crate::SimpleCallOnReturn {
-                b: true,
-                f: Box::new(|| {
-                    uninit_fuse_context(false);
-                }),
-            }))
-        } else {
-            None
-        }
-    };
-
     let (tx_cb_result, rx_cb_result) = channel();
     let ctx = Some(ClipboardContext::new().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?);
     clipboard_listener::subscribe(sp.name(), tx_cb_result)?;
@@ -80,18 +59,10 @@ fn run(sp: EmptyExtraFieldService) -> ResultType<()> {
     while sp.ok() {
         match rx_cb_result.recv_timeout(Duration::from_millis(INTERVAL)) {
             Ok(ClipboardEvent::Changed) => {
-                #[cfg(feature = "unix-file-copy-paste")]
-                if sp.name() == FILE_NAME {
-                    handler.check_clipboard_file();
-                    continue;
-                }
                 if let Some(msg) = handler.get_clipboard_msg() {
                     sp.send(msg);
                 }
             }
-            // Host startup state must not supersede a client's explicit initial snapshot.
-            #[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-            Ok(ClipboardEvent::InitialSelection) => {}
             Ok(ClipboardEvent::Stop) => {
                 log::debug!("Clipboard listener stopped");
                 break;
@@ -148,9 +119,6 @@ fn decode_text_clipboard(clipboard: &Clipboard) -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn should_skip_wayland_clipboard_sync(msg: &Message) -> bool {
-    if crate::platform::linux::is_x11() {
-        return false;
-    }
     let is_recent_wayland_input = |clipboard: &Clipboard| -> bool {
         let Some(text) = decode_text_clipboard(clipboard) else {
             return false;
@@ -170,30 +138,6 @@ fn should_skip_wayland_clipboard_sync(msg: &Message) -> bool {
 
 #[cfg(not(target_os = "android"))]
 impl Handler {
-    #[cfg(feature = "unix-file-copy-paste")]
-    fn check_clipboard_file(&mut self) {
-        if let Some(urls) = check_clipboard_files(&mut self.ctx, ClipboardSide::Host, false) {
-            if !urls.is_empty() {
-                #[cfg(target_os = "macos")]
-                if crate::clipboard::is_file_url_set_by_rustdesk(&urls) {
-                    return;
-                }
-                match clipboard::platform::unix::serv_files::sync_files(&urls) {
-                    Ok(()) => {
-                        // Use `send_data()` here to reuse `handle_file_clip()` in `connection.rs`.
-                        hbb_common::allow_err!(clipboard::send_data(
-                            0,
-                            unix_file_clip::get_format_list()
-                        ));
-                    }
-                    Err(e) => {
-                        log::error!("Failed to sync clipboard files: {}", e);
-                    }
-                }
-            }
-        }
-    }
-
     fn get_clipboard_msg(&mut self) -> Option<Message> {
         #[cfg(target_os = "windows")]
         if crate::common::is_server() && crate::platform::is_root() {
@@ -201,7 +145,8 @@ impl Handler {
                 Err(e) => {
                     log::error!("Failed to read clipboard from cm: {}", e);
                 }
-                Ok(data) => {
+                Ok(mut data) => {
+                    data.retain(|c| c.format == ClipboardFormat::Text as i32);
                     // Skip sending empty clipboard data.
                     // Maybe there's something wrong reading the clipboard data in cm, but no error msg is returned.
                     // The clipboard data should not be empty, the last line will try again to get the clipboard data.
@@ -213,12 +158,7 @@ impl Handler {
                                 .map(|c| Clipboard {
                                     compress: c.compress,
                                     content: c.content,
-                                    width: c.width,
-                                    height: c.height,
-                                    format: ClipboardFormat::from_i32(c.format)
-                                        .unwrap_or(ClipboardFormat::Text)
-                                        .into(),
-                                    special_name: c.special_name,
+                                    format: ClipboardFormat::Text.into(),
                                     ..Default::default()
                                 })
                                 .collect(),
@@ -316,9 +256,6 @@ impl Handler {
                             }
                             return Ok(contents);
                         }
-                    }
-                    Some(Data::ClipboardFile(ClipboardFile::MonitorReady)) => {
-                        // ClipboardFile::MonitorReady is the first message sent by cm.
                     }
                     _ => {
                         bail!("failed to get clipboard data from cm");

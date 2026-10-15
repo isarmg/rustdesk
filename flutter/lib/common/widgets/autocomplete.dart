@@ -3,15 +3,13 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
-import '../../../models/platform_model.dart';
+import '../../models/platform_model.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
 
 @visibleForTesting
 List<Peer> mergeAutocompletePeers({
-  Iterable<Peer> addressBookPeers = const [],
-  Iterable<Peer> groupPeers = const [],
   Iterable<Peer> lanPeers = const [],
   Iterable<Peer> recentPeers = const [],
   Iterable<String> restRecentPeerIds = const [],
@@ -30,12 +28,6 @@ List<Peer> mergeAutocompletePeers({
     }
   }
 
-  for (final peer in addressBookPeers) {
-    addPeer(peer);
-  }
-  for (final peer in groupPeers) {
-    addPeer(peer);
-  }
   for (final peer in lanPeers) {
     addPeer(peer);
   }
@@ -132,8 +124,6 @@ class AllPeersLoader {
     _isCleared = false;
     gFFI.recentPeersModel.addListener(_mergeAllPeers);
     gFFI.lanPeersModel.addListener(_mergeAllPeers);
-    gFFI.abModel.addPeerUpdateListener(_listenerKey, _mergeAllPeers);
-    gFFI.groupModel.addPeerUpdateListener(_listenerKey, _mergeAllPeers);
     platformFFI.registerEventHandler(_cbQueryOnlines, _listenerKey,
         (evt) async {
       _updateOnlineState(evt);
@@ -143,8 +133,6 @@ class AllPeersLoader {
   void clear() {
     gFFI.recentPeersModel.removeListener(_mergeAllPeers);
     gFFI.lanPeersModel.removeListener(_mergeAllPeers);
-    gFFI.abModel.removePeerUpdateListener(_listenerKey);
-    gFFI.groupModel.removePeerUpdateListener(_listenerKey);
     platformFFI.unregisterEventHandler(_cbQueryOnlines, _listenerKey);
     _queryOnlineTimer?.cancel();
     _lastQueryOnlineOptions = const [];
@@ -180,8 +168,6 @@ class AllPeersLoader {
       return;
     }
     peers = mergeAutocompletePeers(
-      addressBookPeers: gFFI.abModel.allPeers(),
-      groupPeers: gFFI.groupModel.peers,
       lanPeers: gFFI.lanPeersModel.peers,
       recentPeers: gFFI.recentPeersModel.peers,
       restRecentPeerIds: gFFI.recentPeersModel.restPeerIds,
@@ -400,26 +386,6 @@ class AutocompletePeerTileState extends State<AutocompletePeerTile> {
                     )
                   ],
                 ))));
-    final colors = _frontN(widget.peer.tags, 25)
-        .map((e) => gFFI.abModel.getCurrentAbTagColor(e))
-        .toList();
-    return Tooltip(
-      message: !(isDesktop || isWebDesktop)
-          ? ''
-          : widget.peer.tags.isNotEmpty
-              ? '${translate('Tags')}: ${widget.peer.tags.join(', ')}'
-              : '',
-      child: Stack(children: [
-        child,
-        if (colors.isNotEmpty)
-          Positioned(
-            top: 5,
-            right: 10,
-            child: CustomPaint(
-              painter: TagPainter(radius: 3, colors: colors),
-            ),
-          )
-      ]),
-    );
+    return child;
   }
 }

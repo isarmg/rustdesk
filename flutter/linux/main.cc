@@ -66,6 +66,7 @@ bool flutter_rustdesk_core_main() {
 }
 
 int main(int argc, char** argv) {
+  gdk_set_allowed_backends("wayland");
   if (!flutter_rustdesk_core_main()) {
       return 0;
   }

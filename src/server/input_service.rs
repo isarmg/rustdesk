@@ -11,7 +11,9 @@ use base::message_proto::{
 use dispatch::Queue;
 use enigo::{Enigo, Key, KeyboardControllable, MouseButton, MouseControllable};
 use hbb_common::{get_time, protobuf::EnumOrUnknown};
-use rdev::{self, EventType, Key as RdevKey, KeyCode, RawKey};
+use rdev::Key as RdevKey;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use rdev::{self, EventType, KeyCode, RawKey};
 #[cfg(target_os = "macos")]
 use rdev::{CGEventSourceStateID, CGEventTapLocation, VirtualInput};
 #[cfg(target_os = "linux")]
@@ -492,6 +494,7 @@ fn run_window_focus(sp: EmptyExtraFieldService, state: &mut StateWindowFocus) ->
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 enum KeysDown {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     RdevKey(RawKey),
     EnigoKey(u64),
 }
@@ -763,10 +766,6 @@ pub async fn setup_uinput(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultT
     log::info!("UInput mouse created");
 
     let mut en = ENIGO.lock().unwrap();
-    // enigo guessed x11 once at construction, which is what a Wayland greeter reads as, and
-    // then routes the devices installed below to a null xdo that drops everything silently.
-    // Reaching here means `wayland_use_uinput()` was true, so this states a fact.
-    en.set_is_x11(false);
     // One lock for both, so there is no window where the keyboard is custom and the mouse is not.
     en.set_custom_keyboard(Box::new(keyboard));
     en.set_custom_mouse(Box::new(mouse));
@@ -776,8 +775,6 @@ pub async fn setup_uinput(minx: i32, maxx: i32, miny: i32, maxy: i32) -> ResultT
 #[cfg(target_os = "linux")]
 pub async fn setup_rdp_input() -> ResultType<(), Box<dyn std::error::Error>> {
     let mut en = ENIGO.lock()?;
-    // Same as `setup_uinput`: the caller is gated on `wayland_use_rdp_input()`.
-    en.set_is_x11(false);
     let rdp_info_lock = RDP_SESSION_INFO.lock()?;
     let rdp_info = rdp_info_lock.as_ref().ok_or("RDP session is None")?;
 
@@ -952,12 +949,6 @@ pub fn fix_key_down_timeout_at_exit() {
 }
 
 #[inline]
-#[cfg(target_os = "linux")]
-pub fn clear_remapped_keycode() {
-    ENIGO.lock().unwrap().tfc_clear_remapped();
-}
-
-#[inline]
 fn record_key_is_control_key(record_key: u64) -> bool {
     record_key < KEY_CHAR_START
 }
@@ -1000,6 +991,7 @@ pub fn release_device_modifiers() {
 #[inline]
 fn release_record_key(record_key: KeysDown) {
     let func = move || match record_key {
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         KeysDown::RdevKey(raw_key) => {
             simulate_(&EventType::KeyRelease(RdevKey::RawKey(raw_key)));
         }
@@ -1618,14 +1610,10 @@ pub fn reset_input_ondisconn() {
     QUEUE.exec_async(reset_input);
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn sim_rdev_rawkey_position(code: KeyCode, keydown: bool) {
     #[cfg(target_os = "windows")]
     let rawkey = RawKey::ScanCode(code);
-    #[cfg(target_os = "linux")]
-    let rawkey = RawKey::LinuxXorgKeycode(code);
-    // // to-do: test android
-    // #[cfg(target_os = "android")]
-    // let rawkey = RawKey::LinuxConsoleKeycode(code);
     #[cfg(target_os = "macos")]
     let rawkey = RawKey::MacVirtualKeycode(code);
 
@@ -1699,7 +1687,7 @@ fn release_capslock() {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 #[inline]
 fn simulate_(event_type: &EventType) {
     match rdev::simulate(&event_type) {
@@ -1724,13 +1712,9 @@ fn map_keyboard_mode(evt: &KeyEvent) {
     #[cfg(windows)]
     crate::platform::windows::try_change_desktop();
 
-    // Wayland
     #[cfg(target_os = "linux")]
-    if !crate::platform::linux::is_x11() {
-        wayland_send_raw_key(evt.chr() as u16, evt.down);
-        return;
-    }
-
+    wayland_send_raw_key(evt.chr() as u16, evt.down);
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     sim_rdev_rawkey_position(evt.chr() as _, evt.down);
 }
 
@@ -1793,23 +1777,13 @@ fn release_unpressed_modifiers(en: &mut Enigo, key_event: &KeyEvent) {
     fix_modifiers(&key_event.modifiers[..], en, ck_value);
 }
 
-#[cfg(target_os = "linux")]
-fn is_altgr_pressed() -> bool {
-    let altgr_rawkey = RawKey::LinuxXorgKeycode(ControlKey::RAlt.value() as _);
-    KEYS_DOWN
-        .lock()
-        .unwrap()
-        .get(&KeysDown::RdevKey(altgr_rawkey))
-        .is_some()
-}
-
 #[cfg(not(target_os = "macos"))]
 fn press_modifiers(en: &mut Enigo, key_event: &KeyEvent, to_release: &mut Vec<Key>) {
     for ref ck in key_event.modifiers.iter() {
         if let Some(key) = control_key_value_to_key(ck.value()) {
             if !is_pressed(&key, en) {
                 #[cfg(target_os = "linux")]
-                if key == Key::Alt && is_altgr_pressed() {
+                if key == Key::Alt && en.get_key_state(Key::RightAlt) {
                     continue;
                 }
                 en.key_down(key.clone()).ok();
@@ -1852,7 +1826,7 @@ fn process_chr(en: &mut Enigo, chr: u32, down: bool, _hotkey: bool) {
     // - ASCII printable: input via key events (custom keyboard path, e.g. portal keysym)
     // - Non-ASCII: input via clipboard paste
     #[cfg(target_os = "linux")]
-    if !crate::platform::linux::is_x11() && wayland_use_uinput() {
+    if wayland_use_uinput() {
         // Skip clipboard for hotkeys (Ctrl/Alt/Meta pressed)
         if !is_hotkey_modifier_pressed(en) {
             if let Ok(c) = char::try_from(chr) {
@@ -1908,7 +1882,7 @@ fn process_unicode(en: &mut Enigo, chr: u32) {
     // - ASCII printable: input via key sequence (custom keyboard path)
     // - Non-ASCII: input via clipboard paste
     #[cfg(target_os = "linux")]
-    if !crate::platform::linux::is_x11() && wayland_use_uinput() {
+    if wayland_use_uinput() {
         if let Ok(c) = char::try_from(chr) {
             if is_ascii_printable(c) {
                 en.key_sequence(&c.to_string());
@@ -1929,7 +1903,7 @@ fn process_seq(en: &mut Enigo, sequence: &str) {
     // - pure ASCII printable sequence: input via key sequence (custom keyboard path)
     // - any non-ASCII present: input whole sequence via clipboard to preserve order
     #[cfg(target_os = "linux")]
-    if !crate::platform::linux::is_x11() && wayland_use_uinput() {
+    if wayland_use_uinput() {
         if sequence.chars().all(is_ascii_printable) {
             en.key_sequence(sequence);
         } else {
@@ -1986,7 +1960,7 @@ fn get_wayland_clipboard_input_normalized_text(text: &str) -> Option<String> {
 #[cfg(target_os = "linux")]
 #[inline]
 fn record_wayland_clipboard_input_for_sync_filter(text: &str) -> Option<(Instant, String)> {
-    if text.is_empty() || crate::platform::linux::is_x11() {
+    if text.is_empty() {
         return None;
     }
     let normalized = get_wayland_clipboard_input_normalized_text(text)?;
@@ -2016,7 +1990,7 @@ fn rollback_wayland_clipboard_input_record(record: (Instant, String)) {
 
 #[cfg(target_os = "linux")]
 pub(super) fn is_recent_wayland_clipboard_input(text: &str) -> bool {
-    if text.is_empty() || crate::platform::linux::is_x11() {
+    if text.is_empty() {
         return false;
     }
     let Some(normalized) = get_wayland_clipboard_input_normalized_text(text) else {
@@ -2187,21 +2161,11 @@ fn release_shift_for_char_input(en: &mut Enigo) {
     // Shift key_up event when the user physically releases Shift. Restoring it here would
     // cause a brief Shift re-press that could interfere with the next input event.
 
-    let is_x11 = crate::platform::linux::is_x11();
-
     if get_modifier_state(Key::Shift, en) {
-        if !is_x11 {
-            en.key_up(Key::Shift);
-        } else {
-            simulate_(&EventType::KeyRelease(RdevKey::ShiftLeft));
-        }
+        en.key_up(Key::Shift);
     }
     if get_modifier_state(Key::RightShift, en) {
-        if !is_x11 {
-            en.key_up(Key::RightShift);
-        } else {
-            simulate_(&EventType::KeyRelease(RdevKey::ShiftRight));
-        }
+        en.key_up(Key::RightShift);
     }
 }
 
@@ -2268,7 +2232,7 @@ fn translate_keyboard_mode(evt: &KeyEvent) {
             // - rdp_input mode (--server): forward sequence to custom keyboard handler so
             //   ASCII can use Portal keysym and non-ASCII can use clipboard.
             #[cfg(target_os = "linux")]
-            if !crate::platform::linux::is_x11() {
+            {
                 let mut en = ENIGO.lock().unwrap();
                 if wayland_use_rdp_input() {
                     release_shift_for_char_input(&mut en);
@@ -2317,19 +2281,15 @@ fn translate_keyboard_mode(evt: &KeyEvent) {
             //
             // Try to release shift first.
             // remote: Shift + 1 => 1
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             let mut en = ENIGO.lock().unwrap();
 
             #[cfg(target_os = "macos")]
             en.key_sequence(seq);
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            #[cfg(target_os = "windows")]
             {
-                #[cfg(target_os = "windows")]
                 let simulate_win_hot_key = is_hot_key_modifiers_down(&mut en);
-                #[cfg(target_os = "linux")]
-                let simulate_win_hot_key = false;
                 if !simulate_win_hot_key {
-                    #[cfg(target_os = "linux")]
-                    release_shift_for_char_input(&mut en);
                     #[cfg(target_os = "windows")]
                     {
                         if get_modifier_state(Key::Shift, &mut en) {
@@ -2349,8 +2309,6 @@ fn translate_keyboard_mode(evt: &KeyEvent) {
                     } else {
                         rdev::simulate_unicode(chr as _).ok();
                     }
-                    #[cfg(target_os = "linux")]
-                    en.key_click(Key::Layout(chr));
                 }
             }
         }
@@ -2358,14 +2316,7 @@ fn translate_keyboard_mode(evt: &KeyEvent) {
             #[cfg(target_os = "windows")]
             translate_process_code(evt.chr(), evt.down);
             #[cfg(target_os = "linux")]
-            {
-                if !crate::platform::linux::is_x11() {
-                    // Wayland: use uinput to send raw keycode
-                    wayland_send_raw_key(evt.chr() as u16, evt.down);
-                } else {
-                    sim_rdev_rawkey_position(evt.chr() as _, evt.down);
-                }
-            }
+            wayland_send_raw_key(evt.chr() as u16, evt.down);
             #[cfg(target_os = "macos")]
             sim_rdev_rawkey_position(evt.chr() as _, evt.down);
         }
@@ -2567,13 +2518,13 @@ async fn send_sas() -> ResultType<()> {
 #[inline]
 #[cfg(target_os = "linux")]
 pub fn wayland_use_uinput() -> bool {
-    !crate::platform::is_x11() && crate::is_server()
+    crate::is_server()
 }
 
 #[inline]
 #[cfg(target_os = "linux")]
 pub fn wayland_use_rdp_input() -> bool {
-    !crate::platform::is_x11() && !crate::is_server()
+    !crate::is_server()
 }
 
 #[cfg(target_os = "linux")]

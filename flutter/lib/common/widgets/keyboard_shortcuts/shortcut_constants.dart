@@ -9,7 +9,6 @@ const kShortcutActionScreenshot = 'screenshot';
 const kShortcutActionInsertLock = 'insert_lock';
 const kShortcutActionRefresh = 'refresh';
 const kShortcutActionToggleBlockInput = 'toggle_block_input';
-const kShortcutActionToggleRecording = 'toggle_recording';
 const kShortcutActionSwitchSides = 'switch_sides';
 const kShortcutActionCloseTab = 'close_tab';
 const kShortcutActionToggleToolbar = 'toggle_toolbar';
@@ -31,13 +30,11 @@ const kShortcutActionsRunOnKeyUp = {
   kShortcutActionSwitchTabPrev,
   kShortcutActionRestartRemote,
   kShortcutActionSwitchSides,
-  kShortcutActionToggleChat,
 };
 const kShortcutActionToggleMute = 'toggle_mute';
 const kShortcutActionPinToolbar = 'pin_toolbar';
 const kShortcutActionViewModeOriginal = 'view_mode_original';
 const kShortcutActionViewModeAdaptive = 'view_mode_adaptive';
-const kShortcutActionToggleChat = 'toggle_chat';
 const kShortcutActionToggleQualityMonitor = 'toggle_quality_monitor';
 const kShortcutActionToggleShowRemoteCursor = 'toggle_show_remote_cursor';
 const kShortcutActionToggleShowMyCursor = 'toggle_show_my_cursor';
@@ -71,13 +68,11 @@ const kShortcutActionToggleSwapLeftRightMouse = 'toggle_swap_left_right_mouse';
 const kShortcutActionToggleLockAfterSessionEnd = 'toggle_lock_after_session_end';
 const kShortcutActionToggleTrueColor = 'toggle_true_color';
 const kShortcutActionToggleSwapCtrlCmd = 'toggle_swap_ctrl_cmd';
-const kShortcutActionToggleEnableFileCopyPaste = 'toggle_enable_file_copy_paste';
 const kShortcutActionViewModeCustom = 'view_mode_custom';
 const kShortcutActionImageQualityBest = 'image_quality_best';
 const kShortcutActionImageQualityBalanced = 'image_quality_balanced';
 const kShortcutActionImageQualityLow = 'image_quality_low';
 const kShortcutActionSendClipboardKeystrokes = 'send_clipboard_keystrokes';
-const kShortcutActionToggleVoiceCall = 'toggle_voice_call';
 const kShortcutActionToggleViewOnly = 'toggle_view_only';
 
 const kShortcutLocalConfigKey = 'keyboard-shortcuts';
@@ -112,7 +107,6 @@ final List<Map<String, Object>> kDefaultShortcutBindings = [
     // unverified; Mute can be rebound to a chord that reaches the app.
     [kShortcutActionToggleMute,             's'],
     [kShortcutActionToggleBlockInput,       'i'],
-    [kShortcutActionToggleChat,             'c'],
   ])
     {
       'action': entry[0],

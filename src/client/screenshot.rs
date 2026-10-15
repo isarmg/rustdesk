@@ -1,6 +1,3 @@
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::clipboard::{update_clipboard, ClipboardSide};
-use base::message_proto::*;
 use hbb_common::ResultType;
 use std::sync::Mutex;
 
@@ -10,7 +7,6 @@ lazy_static::lazy_static! {
 
 pub enum ScreenshotAction {
     SaveAs(String),
-    CopyToClipboard,
     Discard,
 }
 
@@ -31,7 +27,6 @@ impl From<&str> for ScreenshotAction {
                     Self::default()
                 }
             }
-            Some('1') => Self::CopyToClipboard,
             Some('2') => Self::default(),
             _ => Self::default(),
         }
@@ -42,7 +37,6 @@ impl Into<String> for ScreenshotAction {
     fn into(self) -> String {
         match self {
             Self::SaveAs(p) => format!("0:{p}"),
-            Self::CopyToClipboard => "1".to_owned(),
             Self::Discard => "2".to_owned(),
         }
     }
@@ -72,21 +66,12 @@ impl Screenshot {
     }
 
     fn handle_screenshot_(data: bytes::Bytes, action: String) -> ResultType<()> {
+        if action == "1" {
+            hbb_common::bail!("Image clipboard is not supported");
+        }
         match ScreenshotAction::from(&action as &str) {
             ScreenshotAction::SaveAs(p) => {
                 std::fs::write(p, data)?;
-            }
-            ScreenshotAction::CopyToClipboard => {
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                {
-                    let clips = vec![Clipboard {
-                        compress: false,
-                        content: data,
-                        format: ClipboardFormat::ImagePng.into(),
-                        ..Default::default()
-                    }];
-                    update_clipboard(clips, ClipboardSide::Client);
-                }
             }
             ScreenshotAction::Discard => {}
         }
@@ -106,6 +91,15 @@ pub fn handle_screenshot(action: String) -> String {
 mod tests {
     use super::Screenshot;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn removed_copy_action_preserves_the_screenshot_for_saving() {
+        let mut screenshot = Screenshot {
+            data: Some(bytes::Bytes::from_static(b"screenshot data")),
+        };
+        assert!(!screenshot.handle_screenshot("1".to_owned()).is_empty());
+        assert!(screenshot.data.is_some());
+    }
 
     #[test]
     fn preserves_cached_screenshot_when_save_fails() {

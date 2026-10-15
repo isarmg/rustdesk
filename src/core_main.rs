@@ -36,7 +36,7 @@ fn finish_macos_update(result: hbb_common::ResultType<()>) -> Option<CoreMainAct
     }
 }
 
-/// shared by flutter and sciter main function
+/// Shared startup for the Flutter application and background commands.
 ///
 /// [Note]
 /// If it returns [`None`], then the process will terminate, and flutter gui will not be started.
@@ -69,11 +69,6 @@ pub fn core_main() -> Option<CoreMainAction> {
             if [
                 "--connect",
                 "--play",
-                "--file-transfer",
-                "--view-camera",
-                "--port-forward",
-                "--terminal",
-                "--rdp",
             ]
             .contains(&arg.as_str())
             {
@@ -126,7 +121,7 @@ pub fn core_main() -> Option<CoreMainAction> {
         }
     }
     #[cfg(windows)]
-    if args.contains(&"--connect".to_string()) || args.contains(&"--view-camera".to_string()) {
+    if args.contains(&"--connect".to_string()) {
         base::platform::windows::start_cpu_performance_monitor();
     }
     #[cfg(feature = "flutter")]
@@ -284,8 +279,8 @@ pub fn core_main() -> Option<CoreMainAction> {
                 if config::is_disable_installation() {
                     return None;
                 }
-                let (printer_override, debug) = parse_silent_install_args(&args);
-                let options = platform::get_silent_install_options(printer_override);
+                let debug = args.iter().skip(1).any(|arg| arg == "debug");
+                let options = "desktopicon startmenu";
                 let res = platform::install_me(options, "".to_owned(), true, debug);
                 let text = match res {
                     Ok(_) => translate("Installation Successful!".to_string()),
@@ -327,28 +322,7 @@ pub fn core_main() -> Option<CoreMainAction> {
                     crate::virtual_display_manager::amyuni_idd::uninstall_driver()
                 );
                 return None;
-            } else if args[0] == "--install-remote-printer" {
-                #[cfg(windows)]
-                if crate::platform::is_win_10_or_greater() {
-                    match remote_printer::install_update_printer(&crate::get_app_name()) {
-                        Ok(_) => {
-                            log::info!("Remote printer installed/updated successfully");
-                        }
-                        Err(e) => {
-                            log::error!("Failed to install/update the remote printer: {}", e);
-                        }
-                    }
-                } else {
-                    log::error!("Win10 or greater required!");
-                }
-                return None;
-            } else if args[0] == "--uninstall-remote-printer" {
-                #[cfg(windows)]
-                if crate::platform::is_win_10_or_greater() {
-                    remote_printer::uninstall_printer(&crate::get_app_name());
-                    log::info!("Remote printer uninstalled");
-                }
-                return None;
+
             }
         }
         #[cfg(target_os = "macos")]
@@ -526,186 +500,19 @@ pub fn core_main() -> Option<CoreMainAction> {
                 println!("Installation and administrative privileges required!");
             }
             return None;
-        } else if args[0] == "--assign" {
-            if config::Config::no_register_device() {
-                println!("Cannot assign an unregistrable device!");
-            } else if crate::platform::is_installed() && is_root() {
-                let max = args.len() - 1;
-                let pos = args.iter().position(|x| x == "--token").unwrap_or(max);
-                if pos < max {
-                    let token = args[pos + 1].to_owned();
-                    let id = crate::ipc::get_id();
-                    let uuid = crate::encode64(hbb_common::get_uuid());
-                    let get_value = |c: &str| {
-                        let pos = args.iter().position(|x| x == c).unwrap_or(max);
-                        if pos < max {
-                            Some(args[pos + 1].to_owned())
-                        } else {
-                            None
-                        }
-                    };
-                    let user_name = get_value("--user_name");
-                    let strategy_name = get_value("--strategy_name");
-                    let address_book_name = get_value("--address_book_name");
-                    let address_book_tag = get_value("--address_book_tag");
-                    let address_book_alias = get_value("--address_book_alias");
-                    let address_book_password = get_value("--address_book_password");
-                    let address_book_note = get_value("--address_book_note");
-                    let device_group_name = get_value("--device_group_name");
-                    let note = get_value("--note");
-                    let device_username = get_value("--device_username");
-                    let device_name = get_value("--device_name");
-                    let mut body = serde_json::json!({
-                        "id": id,
-                        "uuid": uuid,
-                    });
-                    let header = "Authorization: Bearer ".to_owned() + &token;
-                    if user_name.is_none()
-                        && strategy_name.is_none()
-                        && address_book_name.is_none()
-                        && device_group_name.is_none()
-                        && note.is_none()
-                        && device_username.is_none()
-                        && device_name.is_none()
-                    {
-                        println!(
-                            r#"At least one of the following options is required:
-  --user_name
-  --strategy_name
-  --address_book_name
-  --device_group_name
-  --note
-  --device_username
-  --device_name"#
-                        );
-                    } else {
-                        if let Some(name) = user_name {
-                            body["user_name"] = serde_json::json!(name);
-                        }
-                        if let Some(name) = strategy_name {
-                            body["strategy_name"] = serde_json::json!(name);
-                        }
-                        if let Some(name) = address_book_name {
-                            body["address_book_name"] = serde_json::json!(name);
-                            if let Some(name) = address_book_tag {
-                                body["address_book_tag"] = serde_json::json!(name);
-                            }
-                            if let Some(name) = address_book_alias {
-                                body["address_book_alias"] = serde_json::json!(name);
-                            }
-                            if let Some(name) = address_book_password {
-                                body["address_book_password"] = serde_json::json!(name);
-                            }
-                            if let Some(name) = address_book_note {
-                                body["address_book_note"] = serde_json::json!(name);
-                            }
-                        }
-                        if let Some(name) = device_group_name {
-                            body["device_group_name"] = serde_json::json!(name);
-                        }
-                        if let Some(name) = note {
-                            body["note"] = serde_json::json!(name);
-                        }
-                        if let Some(name) = device_username {
-                            body["device_username"] = serde_json::json!(name);
-                        }
-                        if let Some(name) = device_name {
-                            body["device_name"] = serde_json::json!(name);
-                        }
-                        let url = crate::ui_interface::get_api_server() + "/api/devices/cli";
-                        match crate::post_request_sync(url, body.to_string(), &header) {
-                            Err(err) => println!("{}", err),
-                            Ok(text) => {
-                                if text.is_empty() {
-                                    println!("Done!");
-                                } else {
-                                    println!("{}", text);
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    println!("--token is required!");
-                }
-            } else {
-                println!("Installation and administrative privileges required!");
-            }
-            return None;
-        } else if args[0] == "--deploy" {
-            if config::Config::no_register_device() {
-                println!("Cannot deploy an unregistrable device!");
-            } else if config::is_outgoing_only() {
-                println!("Cannot deploy Outgoing-only clients.");
-            } else if crate::platform::is_installed() && is_root() {
-                let max = args.len() - 1;
-                let pos = args.iter().position(|x| x == "--token").unwrap_or(max);
-                if pos >= max {
-                    println!("--token is required!");
-                    return None;
-                }
-                let token = args[pos + 1].to_owned();
-                let get_value = |c: &str| {
-                    let pos = args.iter().position(|x| x == c).unwrap_or(max);
-                    if pos < max {
-                        Some(args[pos + 1].to_owned())
-                    } else {
-                        None
-                    }
-                };
-                // An empty --id (e.g. an unset var) would deploy a blank id; the Android flow guards this too (#15146).
-                let new_id = get_value("--id").filter(|s| !s.is_empty());
-                match crate::ui_interface::deploy_device(token, new_id) {
-                    crate::ui_interface::DeployResult::Ok => {
-                        println!("Device deployed.");
-                    }
-                    crate::ui_interface::DeployResult::NotEnabled => {
-                        println!("Server does not require deployment.");
-                        std::process::exit(3);
-                    }
-                    crate::ui_interface::DeployResult::InvalidInput => {
-                        println!("Invalid input.");
-                        std::process::exit(5);
-                    }
-                    crate::ui_interface::DeployResult::IdTaken(id) => {
-                        println!(
-                            "Id `{}` is already used by another machine on the server.",
-                            id
-                        );
-                        std::process::exit(6);
-                    }
-                    crate::ui_interface::DeployResult::Error(err) => {
-                        println!("{}", err);
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                println!("Installation and administrative privileges required!");
-            }
-            return None;
         } else if args[0] == "--check-hwcodec-config" {
             #[cfg(feature = "hwcodec")]
             crate::ipc::hwcodec_process();
-            return None;
-        } else if args[0] == "--terminal-helper" {
-            // Terminal helper process - runs as user to create ConPTY
-            // This is needed because ConPTY has compatibility issues with CreateProcessAsUserW
-            #[cfg(target_os = "windows")]
-            {
-                let helper_args: Vec<String> = args[1..].to_vec();
-                if let Err(e) = crate::server::terminal_helper::run_terminal_helper(&helper_args) {
-                    log::error!("Terminal helper failed: {}", e);
-                }
-            }
             return None;
         } else if args[0] == "--cm" {
             // call connection manager to establish connections
             // meanwhile, return true to call flutter window to show control panel
             crate::ui_interface::start_option_status_sync();
         } else if args[0] == "--whiteboard" {
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
-                crate::whiteboard::run();
-            }
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            crate::whiteboard::run();
+            #[cfg(target_os = "linux")]
+            eprintln!("Whiteboard overlays are unsupported on Wayland.");
             return None;
         } else if args[0] == "-gtk-sudo" {
             // rustdesk service kill `rustdesk --` processes
@@ -762,8 +569,7 @@ fn core_main_invoke_new_connection(mut args: std::env::Args) -> Option<Vec<Strin
     let mut param_array = vec![];
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--connect" | "--play" | "--file-transfer" | "--view-camera" | "--port-forward"
-            | "--terminal" | "--rdp" => {
+            "--connect" | "--play" => {
                 authority = Some((&arg.to_string()[2..]).to_owned());
                 id = args.next();
             }
@@ -870,8 +676,6 @@ fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
             | Some("--set-id")
             | Some("--config")
             | Some("--option")
-            | Some("--assign")
-            | Some("--deploy")
     )
 }
 
@@ -881,23 +685,6 @@ fn is_cli_setting_change_disabled() -> bool {
     let allow_command_line_settings =
         config::option2bool(option, &crate::get_builtin_option(option));
     config::is_disable_settings() && !allow_command_line_settings
-}
-
-#[cfg(windows)]
-fn parse_silent_install_args(args: &[String]) -> (Option<bool>, bool) {
-    let mut printer_override = None;
-    let mut debug = false;
-
-    for arg in args.iter().skip(1) {
-        match arg.as_str() {
-            "printer=1" => printer_override = Some(true),
-            "printer=0" => printer_override = Some(false),
-            "debug" => debug = true,
-            _ => {}
-        }
-    }
-
-    (printer_override, debug)
 }
 
 /// Check if the executable is a Quick Support version.

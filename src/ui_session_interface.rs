@@ -7,10 +7,6 @@ use crate::{
     ui_interface::use_texture_render,
 };
 use async_trait::async_trait;
-#[cfg(all(target_os = "windows", not(feature = "flutter")))]
-use base::config::keys;
-#[cfg(not(feature = "flutter"))]
-use base::fs;
 use base::message_proto::*;
 use bytes::Bytes;
 use hbb_common::{
@@ -23,7 +19,7 @@ use hbb_common::{
         sync::mpsc,
         time::{Duration as TokioDuration, Instant},
     },
-    whoami, SessionID, Stream,
+    SessionID, Stream,
 };
 use rdev::{Event, EventType::*, KeyCode};
 #[cfg(all(feature = "vram", feature = "flutter"))]
@@ -43,7 +39,7 @@ use uuid::Uuid;
 use crate::client::io_loop::Remote;
 use crate::client::{
     check_if_retry, handle_hash, handle_login_error, handle_login_from_ui, handle_test_delay,
-    input_os_password, send_mouse, send_pointer_device_event, FileManager, Key, LoginConfigHandler,
+    input_os_password, send_mouse, send_pointer_device_event, Key, LoginConfigHandler,
     QualityStatus, KEY_MAP,
 };
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -66,11 +62,9 @@ pub struct Session<T: InvokeUiSession> {
     pub thread: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
     pub ui_handler: T,
     pub server_keyboard_enabled: Arc<RwLock<bool>>,
-    pub server_file_transfer_enabled: Arc<RwLock<bool>>,
     pub server_clipboard_enabled: Arc<RwLock<bool>>,
     pub last_change_display: Arc<Mutex<ChangeDisplayRecord>>,
     pub connection_round_state: Arc<Mutex<ConnectionRoundState>>,
-    pub printer_names: Arc<RwLock<HashMap<i32, String>>>,
     // Indicate whether the session is reconnected.
     // Used to auto start file transfer after reconnection.
     pub reconnect_count: Arc<AtomicUsize>,
@@ -86,7 +80,6 @@ pub struct Session<T: InvokeUiSession> {
 pub struct SessionPermissionConfig {
     pub lc: Arc<RwLock<LoginConfigHandler>>,
     pub server_keyboard_enabled: Arc<RwLock<bool>>,
-    pub server_file_transfer_enabled: Arc<RwLock<bool>>,
     pub server_clipboard_enabled: Arc<RwLock<bool>>,
 }
 
@@ -190,14 +183,6 @@ impl SessionPermissionConfig {
             && !self.lc.read().unwrap().view_only.v
     }
 
-    #[cfg(feature = "unix-file-copy-paste")]
-    pub fn is_file_clipboard_required(&self) -> bool {
-        let lc = self.lc.read().unwrap();
-        *self.server_keyboard_enabled.read().unwrap()
-            && *self.server_file_transfer_enabled.read().unwrap()
-            && lc.enable_file_copy_paste.v
-            && !lc.view_only.v
-    }
 }
 
 impl<T: InvokeUiSession> Session<T> {
@@ -206,17 +191,8 @@ impl<T: InvokeUiSession> Session<T> {
         SessionPermissionConfig {
             lc: self.lc.clone(),
             server_keyboard_enabled: self.server_keyboard_enabled.clone(),
-            server_file_transfer_enabled: self.server_file_transfer_enabled.clone(),
             server_clipboard_enabled: self.server_clipboard_enabled.clone(),
         }
-    }
-
-    pub fn is_file_transfer(&self) -> bool {
-        self.lc
-            .read()
-            .unwrap()
-            .conn_type
-            .eq(&ConnType::FILE_TRANSFER)
     }
 
     pub fn is_default(&self) -> bool {
@@ -225,24 +201,6 @@ impl<T: InvokeUiSession> Session<T> {
             .unwrap()
             .conn_type
             .eq(&ConnType::DEFAULT_CONN)
-    }
-
-    pub fn is_view_camera(&self) -> bool {
-        self.lc.read().unwrap().conn_type.eq(&ConnType::VIEW_CAMERA)
-    }
-
-    pub fn is_terminal(&self) -> bool {
-        self.lc.read().unwrap().conn_type.eq(&ConnType::TERMINAL)
-    }
-
-    pub fn is_port_forward(&self) -> bool {
-        let conn_type = self.lc.read().unwrap().conn_type;
-        conn_type == ConnType::PORT_FORWARD || conn_type == ConnType::RDP
-    }
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    pub fn is_rdp(&self) -> bool {
-        self.lc.read().unwrap().conn_type.eq(&ConnType::RDP)
     }
 
     #[cfg(feature = "flutter")]
@@ -391,10 +349,6 @@ impl<T: InvokeUiSession> Session<T> {
 
     pub fn toggle_option(&self, name: String) {
         let msg = self.lc.write().unwrap().toggle_option(name.clone());
-        #[cfg(all(target_os = "windows", not(feature = "flutter")))]
-        if name == keys::OPTION_ENABLE_FILE_COPY_PASTE {
-            self.send(Data::ToggleClipboardFile);
-        }
         if let Some(msg) = msg {
             self.send(Data::Message(msg));
         }
@@ -429,15 +383,6 @@ impl<T: InvokeUiSession> Session<T> {
             && !self.lc.read().unwrap().view_only.v
     }
 
-    #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
-    pub fn is_file_clipboard_required(&self) -> bool {
-        let lc = self.lc.read().unwrap();
-        *self.server_keyboard_enabled.read().unwrap()
-            && *self.server_file_transfer_enabled.read().unwrap()
-            && lc.enable_file_copy_paste.v
-            && !lc.view_only.v
-    }
-
     #[cfg(feature = "flutter")]
     pub fn refresh_video(&self, display: i32) {
         if crate::common::is_support_multi_ui_session_num(self.lc.read().unwrap().version) {
@@ -466,20 +411,12 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(LoginConfigHandler::refresh()));
     }
 
-    pub fn record_screen(&self, start: bool) {
-        self.send(Data::RecordScreen(start));
-    }
-
     pub fn is_screenshot_supported(&self) -> bool {
         crate::common::is_support_screenshot_num(self.lc.read().unwrap().version)
     }
 
     pub fn take_screenshot(&self, display: i32, sid: String) {
         self.send(Data::TakeScreenshot((display, sid)));
-    }
-
-    pub fn is_recording(&self) -> bool {
-        self.lc.read().unwrap().record_state
     }
 
     pub fn save_custom_image_quality(&self, custom_image_quality: i32) {
@@ -496,7 +433,7 @@ impl<T: InvokeUiSession> Session<T> {
         if let Some(msg) = msg {
             self.send(Data::Message(msg));
         }
-        if value != "custom" {
+        if value != "custom" && !self.lc.read().unwrap().streaming_enabled() {
             let last_auto_fps = self.lc.read().unwrap().last_auto_fps;
             if last_auto_fps.unwrap_or(usize::MAX) >= 30 {
                 // non custom quality use 30 fps
@@ -511,31 +448,21 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn set_custom_fps(&self, custom_fps: i32) {
-        let msg = self.lc.write().unwrap().set_custom_fps(custom_fps, true);
+        let msg = {
+            let mut lc = self.lc.write().unwrap();
+            let msg = lc.set_custom_fps(custom_fps, true);
+            if lc.streaming_enabled() {
+                let fps = lc.streaming_target_fps();
+                lc.set_custom_fps(fps, false)
+            } else {
+                msg
+            }
+        };
         self.send(Data::Message(msg));
     }
 
     pub fn get_remember(&self) -> bool {
         self.lc.read().unwrap().remember
-    }
-
-    #[cfg(not(feature = "flutter"))]
-    pub fn set_write_override(
-        &mut self,
-        job_id: i32,
-        file_num: i32,
-        is_override: bool,
-        remember: bool,
-        is_upload: bool,
-    ) -> bool {
-        self.send(Data::SetConfirmOverrideFile((
-            job_id,
-            file_num,
-            is_override,
-            remember,
-            is_upload,
-        )));
-        true
     }
 
     pub fn alternative_codecs(&self) -> (bool, bool, bool, bool) {
@@ -604,47 +531,23 @@ impl<T: InvokeUiSession> Session<T> {
         crate::platform::is_xfce()
     }
 
-    pub fn remove_port_forward(&self, port: i32) {
-        let mut config = self.load_config();
-        config.port_forwards = config
-            .port_forwards
-            .drain(..)
-            .filter(|x| x.0 != port)
-            .collect();
-        self.save_config(config);
-        self.send(Data::RemovePortForward(port));
-    }
-
-    pub fn add_port_forward(&self, port: i32, remote_host: String, remote_port: i32) {
-        let mut config = self.load_config();
-        if config
-            .port_forwards
-            .iter()
-            .filter(|x| x.0 == port)
-            .next()
-            .is_some()
-        {
-            return;
-        }
-        let pf = (port, remote_host, remote_port);
-        config.port_forwards.push(pf.clone());
-        self.save_config(config);
-        self.send(Data::AddPortForward(pf));
-    }
-
     pub fn get_option(&self, k: String) -> String {
-        if k.eq("remote_dir") {
-            return self.lc.read().unwrap().get_remote_dir();
-        }
         self.lc.read().unwrap().get_option(&k)
     }
 
-    pub fn set_option(&self, k: String, mut v: String) {
+    pub fn set_option(&self, k: String, v: String) {
         let mut lc = self.lc.write().unwrap();
-        if k.eq("remote_dir") {
-            v = lc.get_all_remote_dir(v);
-        }
+        let streaming_change = lc.conn_type == ConnType::DEFAULT_CONN
+            && (k == base::config::keys::OPTION_STREAMING_MODE
+                || (k == base::config::keys::OPTION_STREAMING_FPS && lc.streaming_enabled()));
         lc.set_option(k, v);
+        if streaming_change {
+            let fps = lc.streaming_target_fps();
+            lc.last_auto_fps = None;
+            let msg = lc.set_custom_fps(fps, false);
+            drop(lc);
+            self.send(Data::Message(msg));
+        }
     }
 
     #[inline]
@@ -666,33 +569,10 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.read().unwrap().info.platform.clone()
     }
 
-    pub fn get_platform(&self, is_remote: bool) -> String {
-        if is_remote {
-            self.peer_platform()
-        } else {
-            whoami::platform().to_string()
-        }
-    }
 
-    pub fn get_path_sep(&self, is_remote: bool) -> &'static str {
-        let p = self.get_platform(is_remote);
-        if &p == crate::PLATFORM_WINDOWS {
-            return "\\";
-        } else {
-            return "/";
-        }
-    }
 
     pub fn input_os_password(&self, pass: String, activate: bool) {
         input_os_password(pass, activate, self.clone());
-    }
-
-    #[cfg(not(feature = "flutter"))]
-    pub fn get_chatbox(&self) -> String {
-        #[cfg(feature = "inline")]
-        return crate::ui::inline::get_chatbox();
-        #[cfg(not(feature = "inline"))]
-        return "".to_owned();
     }
 
     pub fn swap_modifier_key(&self, msg: &mut KeyEvent) {
@@ -780,66 +660,7 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg_out));
     }
 
-    pub fn send_chat(&self, text: String) {
-        let mut misc = Misc::new();
-        misc.set_chat_message(ChatMessage {
-            text,
-            ..Default::default()
-        });
-        let mut msg_out = Message::new();
-        msg_out.set_misc(misc);
-        self.send(Data::Message(msg_out));
-    }
-
     // Terminal methods
-    pub fn open_terminal(&self, terminal_id: i32, rows: u32, cols: u32) {
-        let mut action = TerminalAction::new();
-        action.set_open(OpenTerminal {
-            terminal_id,
-            rows,
-            cols,
-            ..Default::default()
-        });
-        let mut msg_out = Message::new();
-        msg_out.set_terminal_action(action);
-        self.send(Data::Message(msg_out));
-    }
-
-    pub fn send_terminal_input(&self, terminal_id: i32, data: String) {
-        let mut action = TerminalAction::new();
-        action.set_data(TerminalData {
-            terminal_id,
-            data: bytes::Bytes::from(data.into_bytes()),
-            ..Default::default()
-        });
-        let mut msg_out = Message::new();
-        msg_out.set_terminal_action(action);
-        self.send(Data::Message(msg_out));
-    }
-
-    pub fn resize_terminal(&self, terminal_id: i32, rows: u32, cols: u32) {
-        let mut action = TerminalAction::new();
-        action.set_resize(ResizeTerminal {
-            terminal_id,
-            rows,
-            cols,
-            ..Default::default()
-        });
-        let mut msg_out = Message::new();
-        msg_out.set_terminal_action(action);
-        self.send(Data::Message(msg_out));
-    }
-
-    pub fn close_terminal(&self, terminal_id: i32) {
-        let mut action = TerminalAction::new();
-        action.set_close(CloseTerminal {
-            terminal_id,
-            ..Default::default()
-        });
-        let mut msg_out = Message::new();
-        msg_out.set_terminal_action(action);
-        self.send(Data::Message(msg_out));
-    }
 
     pub fn capture_displays(&self, add: Vec<i32>, sub: Vec<i32>, set: Vec<i32>) {
         let mut misc = Misc::new();
@@ -1345,57 +1166,6 @@ impl<T: InvokeUiSession> Session<T> {
         }));
     }
 
-    #[cfg(not(feature = "flutter"))]
-    pub fn get_icon_path(&self, file_type: i32, ext: String) -> String {
-        let mut path = Config::icon_path();
-        if file_type == FileType::DirLink as i32 {
-            let new_path = path.join("dir_link");
-            if !std::fs::metadata(&new_path).is_ok() {
-                #[cfg(windows)]
-                allow_err!(std::os::windows::fs::symlink_file(&path, &new_path));
-                #[cfg(not(windows))]
-                allow_err!(std::os::unix::fs::symlink(&path, &new_path));
-            }
-            path = new_path;
-        } else if file_type == FileType::File as i32 {
-            if !ext.is_empty() {
-                path = path.join(format!("file.{}", ext));
-            } else {
-                path = path.join("file");
-            }
-            if !std::fs::metadata(&path).is_ok() {
-                allow_err!(std::fs::File::create(&path));
-            }
-        } else if file_type == FileType::FileLink as i32 {
-            let new_path = path.join("file_link");
-            if !std::fs::metadata(&new_path).is_ok() {
-                path = path.join("file");
-                if !std::fs::metadata(&path).is_ok() {
-                    allow_err!(std::fs::File::create(&path));
-                }
-                #[cfg(windows)]
-                allow_err!(std::os::windows::fs::symlink_file(&path, &new_path));
-                #[cfg(not(windows))]
-                allow_err!(std::os::unix::fs::symlink(&path, &new_path));
-            }
-            path = new_path;
-        } else if file_type == FileType::DirDrive as i32 {
-            if cfg!(windows) {
-                path = fs::get_path("C:");
-            } else if cfg!(target_os = "macos") {
-                if let Ok(entries) = fs::get_path("/Volumes/").read_dir() {
-                    for entry in entries {
-                        if let Ok(entry) = entry {
-                            path = entry.path();
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        fs::get_string(&path)
-    }
-
     pub fn login(
         &self,
         os_username: String,
@@ -1429,10 +1199,6 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.read().unwrap().enable_trusted_devices
     }
 
-    pub fn new_rdp(&self) {
-        self.send(Data::NewRDP);
-    }
-
     pub fn close(&self) {
         self.send(Data::Close);
     }
@@ -1444,64 +1210,6 @@ impl<T: InvokeUiSession> Session<T> {
             Data::RejectInsecureConnection
         };
         self.send(data);
-    }
-
-    fn try_auto_start_job_str(is_reconnected: bool, job_str: &str) -> Option<String> {
-        if is_reconnected {
-            let job_str = job_str.trim();
-            if let Some(stripped) = job_str.strip_suffix('}') {
-                format!(r#"{},"auto_start": true}}"#, stripped).into()
-            } else {
-                // unreachable in normal cases
-                log::warn!(
-                    "The last character is not '}}': {}, auto start is ignored on flutter",
-                    job_str
-                );
-                Some(job_str.to_owned())
-            }
-        } else {
-            None
-        }
-    }
-
-    pub fn load_last_jobs(&self) {
-        self.clear_all_jobs();
-        let pc = self.load_config();
-        if pc.transfer.write_jobs.is_empty() && pc.transfer.read_jobs.is_empty() {
-            // no last jobs
-            return;
-        }
-        let reconnect_count_thr = if cfg!(feature = "flutter") { 0 } else { 1 };
-        let is_reconnected = self.reconnect_count.load(Ordering::SeqCst) > reconnect_count_thr;
-        // TODO: can add a confirm dialog
-        let mut cnt = 1;
-        for job_str in pc.transfer.read_jobs.iter() {
-            if !job_str.is_empty() {
-                self.load_last_job(
-                    cnt,
-                    Self::try_auto_start_job_str(is_reconnected, job_str)
-                        .as_deref()
-                        .unwrap_or(job_str),
-                    is_reconnected,
-                );
-                cnt += 1;
-                log::info!("restore read_job: {:?}", job_str);
-            }
-        }
-        for job_str in pc.transfer.write_jobs.iter() {
-            if !job_str.is_empty() {
-                self.load_last_job(
-                    cnt,
-                    Self::try_auto_start_job_str(is_reconnected, job_str)
-                        .as_deref()
-                        .unwrap_or(job_str),
-                    is_reconnected,
-                );
-                cnt += 1;
-                log::info!("restore write_job: {:?}", job_str);
-            }
-        }
-        self.update_transfer_list();
     }
 
     pub fn elevate_direct(&self) {
@@ -1622,17 +1330,7 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg));
     }
 
-    #[inline]
-    pub fn request_voice_call(&self) {
-        #[cfg(target_os = "linux")]
-        std::thread::spawn(crate::ipc::start_pa);
-        self.send(Data::NewVoiceCall);
-    }
 
-    #[inline]
-    pub fn close_voice_call(&self) {
-        self.send(Data::CloseVoiceCall);
-    }
 
     pub fn send_selected_session_id(&self, sid: String) {
         if let Ok(sid) = sid.parse::<u32>() {
@@ -1645,28 +1343,9 @@ impl<T: InvokeUiSession> Session<T> {
             let pi = self.lc.read().unwrap().peer_info.clone();
             if let Some(pi) = pi {
                 if pi.windows_sessions.current_sid == sid {
-                    if self.is_file_transfer() {
-                        if pi.username.is_empty() {
-                            self.on_error(
-                                "No active console user logged on, please connect and logon first.",
-                            );
-                        } else {
-                            #[cfg(not(feature = "flutter"))]
-                            {
-                                let remote_dir = self.get_option("remote_dir".to_string());
-                                let show_hidden =
-                                    !self.get_option("remote_show_hidden".to_string()).is_empty();
-                                self.read_remote_dir(remote_dir, show_hidden);
-                            }
-                        }
-                    } else if !self.is_terminal() {
-                        self.msgbox(
-                            "success",
-                            "Successful",
-                            "Connected, waiting for image...",
-                            "",
-                        );
-                    }
+                    self.msgbox(
+                        "success", "Successful", "Connected, waiting for image...", "",
+                    );
                 }
             }
         } else {
@@ -1694,19 +1373,6 @@ impl<T: InvokeUiSession> Session<T> {
         self.lc.read().unwrap().get_conn_token()
     }
 
-    pub fn printer_response(&self, id: i32, path: String, printer_name: String) {
-        self.printer_names.write().unwrap().insert(id, printer_name);
-        let to = std::env::temp_dir().join(format!("rustdesk_printer_{id}"));
-        self.send(Data::SendFiles((
-            id,
-            base::fs::JobType::Printer,
-            path,
-            to.to_string_lossy().to_string(),
-            0,
-            false,
-            true,
-        )));
-    }
 }
 
 pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
@@ -1725,31 +1391,7 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn update_quality_status(&self, qs: QualityStatus);
     fn set_connection_type(&self, is_secured: bool, direct: bool, stream_type: &str);
     fn set_fingerprint(&self, fingerprint: String);
-    fn job_error(&self, id: i32, err: String, file_num: i32);
-    fn job_done(&self, id: i32, file_num: i32);
-    fn clear_all_jobs(&self);
-    fn new_message(&self, msg: String);
-    fn update_transfer_list(&self);
-    fn load_last_job(&self, cnt: i32, job_json: &str, auto_start: bool);
-    fn update_folder_files(
-        &self,
-        id: i32,
-        entries: &Vec<FileEntry>,
-        path: String,
-        is_local: bool,
-        only_count: bool,
-    );
-    fn confirm_delete_files(&self, id: i32, i: i32, name: String);
-    fn override_file_confirm(
-        &self,
-        id: i32,
-        file_num: i32,
-        to: String,
-        is_upload: bool,
-        is_identical: bool,
-    );
     fn update_block_input_state(&self, on: bool);
-    fn job_progress(&self, id: i32, file_num: i32, speed: f64, finished_size: f64);
     fn adapt_size(&self);
     fn on_rgba(&self, display: usize, rgba: &mut scrap::ImageRgb);
     fn msgbox(&self, msgtype: &str, title: &str, text: &str, link: &str, retry: bool);
@@ -1758,10 +1400,6 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn cancel_msgbox(&self, tag: &str);
     fn switch_back(&self, id: &str);
     fn portable_service_running(&self, running: bool);
-    fn on_voice_call_started(&self);
-    fn on_voice_call_closed(&self, reason: &str);
-    fn on_voice_call_waiting(&self);
-    fn on_voice_call_incoming(&self);
     fn get_rgba(&self, display: usize) -> *const u8;
     fn next_rgba(&self, display: usize);
     #[cfg(all(feature = "vram", feature = "flutter"))]
@@ -1770,11 +1408,7 @@ pub trait InvokeUiSession: Send + Sync + Clone + 'static + Sized + Default {
     fn set_current_display(&self, disp_idx: i32);
     #[cfg(feature = "flutter")]
     fn is_multi_ui_session(&self) -> bool;
-    fn update_record_status(&self, start: bool);
-    fn update_empty_dirs(&self, _res: ReadEmptyDirsResponse) {}
-    fn printer_request(&self, id: i32, path: String);
     fn handle_screenshot_resp(&self, sid: String, msg: String);
-    fn handle_terminal_response(&self, response: TerminalResponse);
 }
 
 impl<T: InvokeUiSession> Deref for Session<T> {
@@ -1790,8 +1424,6 @@ impl<T: InvokeUiSession> DerefMut for Session<T> {
         &mut self.ui_handler
     }
 }
-
-impl<T: InvokeUiSession> FileManager for Session<T> {}
 
 #[async_trait]
 impl<T: InvokeUiSession> Interface for Session<T> {
@@ -1830,24 +1462,14 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         if get_version_number(&pi.version) < get_version_number("1.1.10") {
             self.set_permission("restart", false);
         }
-        if self.is_file_transfer() {
-            if pi.username.is_empty() && pi.windows_sessions.sessions.is_empty() {
-                self.on_error("No active console user logged on, please connect and logon first.");
-                return;
-            }
-        } else if !self.is_port_forward() && !self.is_terminal() {
+        {
             if pi.displays.is_empty() {
                 self.lc.write().unwrap().handle_peer_info(&pi);
                 self.update_privacy_mode();
-                let msg = if self.is_view_camera() {
-                    "No cameras"
-                } else {
-                    "No displays"
-                };
-                self.msgbox("error", "Error", msg, "");
+                self.msgbox("error", "Error", "No displays", "");
                 return;
             }
-            if !self.is_view_camera() {
+            {
                 self.try_change_init_resolution(pi.current_display);
                 let p = self.lc.read().unwrap().should_auto_login();
                 if !p.is_empty() {
@@ -1871,9 +1493,7 @@ impl<T: InvokeUiSession> Interface for Session<T> {
         // Save recent peers, then push event to flutter. So flutter can refresh peer page.
         self.lc.write().unwrap().handle_peer_info(&pi);
         self.set_peer_info(&pi);
-        if self.is_file_transfer() {
-            self.close_success();
-        } else if !self.is_port_forward() && !self.is_terminal() {
+        {
             self.msgbox(
                 "success",
                 "Successful",
@@ -1976,132 +1596,12 @@ impl<T: InvokeUiSession> Session<T> {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn io_loop<T: InvokeUiSession>(handler: Session<T>, round: u32) {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
     let (sender, receiver) = mpsc::unbounded_channel::<Data>();
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let (sender, mut receiver) = mpsc::unbounded_channel::<Data>();
     *handler.sender.write().unwrap() = Some(sender.clone());
     let token = LocalConfig::get_option("access_token");
     let key = crate::get_key(false).await;
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if handler.is_port_forward() {
-        handler.lc.write().unwrap().port_forward_mux = crate::port_forward::mux_enabled();
-        if handler.is_rdp() {
-            let port = handler
-                .get_option("rdp_port".to_owned())
-                .parse::<i32>()
-                .unwrap_or(3389);
-            std::env::set_var(
-                "rdp_username",
-                handler.get_option("rdp_username".to_owned()),
-            );
-            std::env::set_var(
-                "rdp_password",
-                handler.get_option("rdp_password".to_owned()),
-            );
-            log::info!("Remote rdp port: {}", port);
-            start_one_port_forward(handler, 0, "".to_owned(), port, receiver, &key, &token).await;
-        } else if handler.args.len() == 0 {
-            let pfs = handler.lc.read().unwrap().port_forwards.clone();
-            let mut queues = HashMap::<i32, mpsc::UnboundedSender<Data>>::new();
-            for d in pfs {
-                sender.send(Data::AddPortForward(d)).ok();
-            }
-            loop {
-                match receiver.recv().await {
-                    Some(Data::AddPortForward((port, remote_host, remote_port))) => {
-                        if port <= 0 || remote_port <= 0 {
-                            continue;
-                        }
-                        let (sender, receiver) = mpsc::unbounded_channel::<Data>();
-                        queues.insert(port, sender);
-                        let handler = handler.clone();
-                        let key = key.clone();
-                        let token = token.clone();
-                        tokio::spawn(async move {
-                            start_one_port_forward(
-                                handler,
-                                port,
-                                remote_host,
-                                remote_port,
-                                receiver,
-                                &key,
-                                &token,
-                            )
-                            .await;
-                        });
-                    }
-                    Some(Data::RemovePortForward(port)) => {
-                        if let Some(s) = queues.remove(&port) {
-                            s.send(Data::Close).ok();
-                        }
-                    }
-                    Some(Data::Close) => {
-                        break;
-                    }
-                    Some(d) => {
-                        for (_, s) in queues.iter() {
-                            s.send(d.clone()).ok();
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        } else {
-            let port = handler.args[0].parse::<i32>().unwrap_or(0);
-            if handler.args.len() != 3
-                || handler.args[2].parse::<i32>().unwrap_or(0) <= 0
-                || port <= 0
-            {
-                handler.on_error("Invalid arguments, usage:<br><br> rustdesk --port-forward remote-id listen-port remote-host remote-port");
-            }
-            let remote_host = handler.args[1].clone();
-            let remote_port = handler.args[2].parse::<i32>().unwrap_or(0);
-            start_one_port_forward(
-                handler,
-                port,
-                remote_host,
-                remote_port,
-                receiver,
-                &key,
-                &token,
-            )
-            .await;
-        }
-        return;
-    }
     let mut remote = Remote::new(handler, receiver, sender);
     remote.io_loop(&key, &token, round).await;
-    let _ = remote.sync_jobs_status_to_local().await;
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn start_one_port_forward<T: InvokeUiSession>(
-    handler: Session<T>,
-    port: i32,
-    remote_host: String,
-    remote_port: i32,
-    receiver: mpsc::UnboundedReceiver<Data>,
-    key: &str,
-    token: &str,
-) {
-    if let Err(err) = crate::port_forward::listen(
-        handler.get_id(),
-        handler.password.clone(),
-        port,
-        handler.clone(),
-        receiver,
-        key,
-        token,
-        handler.lc.clone(),
-        remote_host,
-        remote_port,
-    )
-    .await
-    {
-        handler.on_error(&format!("Failed to listen on {}: {}", port, err));
-    }
-    log::info!("port forward (:{}) exit", port);
 }
 
 #[tokio::main(flavor = "current_thread")]

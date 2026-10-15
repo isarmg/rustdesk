@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
-import 'package:flutter_hbb/common/widgets/login.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'package:flutter_hbb/models/model.dart';
@@ -96,7 +95,6 @@ bool allowDisplaySwitchInPrivacyMode(PeerInfo pi, String privacyModeImpl) {
 /// Action IDs that `toolbarControls` is the sole registrar for. Wiped on
 /// every call so stale closures don't outlive the menu entry that owned
 /// them. Actions registered by `registerSessionShortcutActions` MUST NOT
-/// appear here. `kShortcutActionToggleRecording` is platform-conditional
 /// and handled separately in the unregister pass below.
 const _kToolbarOwnedActionIds = <String>[
   kShortcutActionSendCtrlAltDel,
@@ -141,7 +139,6 @@ const _kToolbarCursorActionIds = <String>[
 const _kToolbarDisplayToggleActionIds = <String>[
   kShortcutActionToggleQualityMonitor,
   kShortcutActionToggleMute,
-  kShortcutActionToggleEnableFileCopyPaste,
   kShortcutActionToggleDisableClipboard,
   kShortcutActionToggleLockAfterSessionEnd,
   kShortcutActionToggleTrueColor,
@@ -457,11 +454,6 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
   for (final actionId in _kToolbarOwnedActionIds) {
     ffi.shortcutModel.unregister(actionId);
   }
-  // toggle_recording is mobile-only here; desktop's registration is owned by
-  // `registerSessionShortcutActions` and must not be touched.
-  if (!(isDesktop || isWeb)) {
-    ffi.shortcutModel.unregister(kShortcutActionToggleRecording);
-  }
 
   List<TTextMenu> v = [];
   // elevation
@@ -570,67 +562,6 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
         actionId: kShortcutActionResetCanvas));
   }
 
-  // https://github.com/rustdesk/rustdesk/pull/9731
-  // Does not work for connection established by "accept".
-  connectWithToken(
-      {bool isFileTransfer = false,
-      bool isViewCamera = false,
-      bool isTcpTunneling = false,
-      bool isTerminal = false}) {
-    final connToken = bind.sessionGetConnToken(sessionId: ffi.sessionId);
-    connect(context, id,
-        isFileTransfer: isFileTransfer,
-        isViewCamera: isViewCamera,
-        isTerminal: isTerminal,
-        isTcpTunneling: isTcpTunneling,
-        connToken: connToken);
-  }
-
-  if (isDefaultConn && isDesktop) {
-    v.add(
-      TTextMenu(
-          child: Text(translate('Transfer file')),
-          onPressed: () => connectWithToken(isFileTransfer: true)),
-    );
-    v.add(
-      TTextMenu(
-          child: Text(translate('View camera')),
-          onPressed: () => connectWithToken(isViewCamera: true)),
-    );
-    v.add(
-      TTextMenu(
-          child: Text('${translate('Terminal')} (beta)'),
-          onPressed: () => connectWithToken(isTerminal: true)),
-    );
-    v.add(
-      TTextMenu(
-          child: Text(translate('TCP tunneling')),
-          onPressed: () => connectWithToken(isTcpTunneling: true)),
-    );
-  }
-  // note
-  if (isDefaultConn && !bind.isDisableAccount()) {
-    v.add(
-      TTextMenu(
-          child: Text(translate('Note')),
-          onPressed: () async {
-            bool isLogin =
-                bind.mainGetLocalOption(key: 'access_token').isNotEmpty;
-            if (!isLogin) {
-              final res = await loginDialog();
-              if (res != true) return;
-              // Desktop: send message to main window to refresh login status
-              // Web: login is required before connection, so no need to refresh
-              // Mobile: same isolate, no need to send message
-              if (isDesktop) {
-                rustDeskWinManager.call(
-                    WindowType.Main, kWindowRefreshCurrentUser, "");
-              }
-            }
-            showAuditDialog(ffi);
-          }),
-    );
-  }
   // divider
   if (isDefaultConn && (isDesktop || isWebDesktop)) {
     v.add(TTextMenu(child: Offstage(), onPressed: () {}, divider: true));
@@ -694,7 +625,7 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
       ffiModel.keyboard &&
       pi.platform != kPeerPlatformAndroid &&
       versionCmp(pi.version, '1.2.0') >= 0 &&
-      bind.peerGetSessionsCount(id: id, connType: ffi.connType.index) == 1) {
+      bind.peerGetSessionsCount(id: id) == 1) {
     v.add(TTextMenu(
         child: Text(translate('Switch Sides')),
         onPressed: () =>
@@ -709,34 +640,10 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
       actionId: kShortcutActionRefresh,
     ));
   }
-  // record
-  if (!(isDesktop || isWeb) &&
-      bind.mainGetLocalOption(key: kOptionHideRecordingButton) != 'Y' &&
-      (ffi.recordingModel.start || (perms["recording"] != false))) {
-    v.add(TTextMenu(
-        child: Row(
-          children: [
-            Text(translate(ffi.recordingModel.start
-                ? 'Stop session recording'
-                : 'Start session recording')),
-            Padding(
-              padding: EdgeInsets.only(left: 12),
-              child: Icon(
-                  ffi.recordingModel.start
-                      ? Icons.pause_circle_filled
-                      : Icons.videocam_outlined,
-                  color: MyTheme.accent),
-            )
-          ],
-        ),
-        onPressed: () => ffi.recordingModel.toggle(),
-        actionId: kShortcutActionToggleRecording));
-  }
-
   // to-do:
   // 1. Web desktop
   // 2. Mobile, copy the image to the clipboard
-  if ((isDefaultConn || ffi.connType == ConnType.viewCamera) && isDesktop) {
+  if (isDefaultConn && isDesktop) {
     final isScreenshotSupported = bind.sessionGetCommonSync(
         sessionId: sessionId, key: 'is_screenshot_supported', param: '');
     if ('true' == isScreenshotSupported) {
@@ -1083,34 +990,6 @@ Future<List<TToggleMenu>> toolbarDisplayToggle(
         },
         child: Text(translate('Mute'))));
   }
-  // file copy and paste
-  // If the version is less than 1.2.4, file copy and paste is supported on Windows only.
-  final isSupportIfPeer_1_2_3 = versionCmp(pi.version, '1.2.4') < 0 &&
-      isWindows &&
-      pi.platform == kPeerPlatformWindows;
-  // If the version is 1.2.4 or later, file copy and paste is supported when kPlatformAdditionsHasFileClipboard is set.
-  final isSupportIfPeer_1_2_4 = versionCmp(pi.version, '1.2.4') >= 0 &&
-      bind.mainHasFileClipboard() &&
-      pi.platformAdditions.containsKey(kPlatformAdditionsHasFileClipboard);
-  if (isDefaultConn &&
-      ffiModel.keyboard &&
-      perms['file'] != false &&
-      (isSupportIfPeer_1_2_3 || isSupportIfPeer_1_2_4)) {
-    final enabled = !ffiModel.viewOnly;
-    final value = bind.sessionGetToggleOptionSync(
-        sessionId: sessionId, arg: kOptionEnableFileCopyPaste);
-    v.add(TToggleMenu(
-        value: value,
-        actionId: kShortcutActionToggleEnableFileCopyPaste,
-        onChanged: enabled
-            ? (value) {
-                if (value == null) return;
-                bind.sessionToggleOption(
-                    sessionId: sessionId, value: kOptionEnableFileCopyPaste);
-              }
-            : null,
-        child: Text(translate('Enable file copy and paste'))));
-  }
   // disable clipboard
   if (isDefaultConn && ffiModel.keyboard && perms['clipboard'] != false) {
     final enabled = !ffiModel.viewOnly;
@@ -1438,7 +1317,6 @@ void registerToolbarShortcuts(BuildContext context, String id, FFI ffi) {
 
   register([
     ..._kToolbarOwnedActionIds,
-    if (!(isDesktop || isWeb)) kShortcutActionToggleRecording,
   ], () => toolbarControls(context, id, ffi));
   register(_kToolbarKeyboardToggleActionIds, () => toolbarKeyboardToggles(ffi));
   register(_kToolbarCursorActionIds, () => toolbarCursor(context, id, ffi));

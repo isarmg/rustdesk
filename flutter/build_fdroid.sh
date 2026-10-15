@@ -331,13 +331,6 @@ prebuild)
 
 		git add .
 
-		# Edit pubspec to make flutter bridge version work
-
-		sed \
-			-i \
-			-e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' \
-			flutter/pubspec.yaml
-
 		# Download Flutter dependencies
 
 		pushd flutter

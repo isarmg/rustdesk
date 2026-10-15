@@ -5,7 +5,6 @@ use xkbcommon_dl::{self as xkb, keysyms};
 mod cache;
 mod source;
 mod wayland;
-mod xwayland;
 
 pub(super) use cache::{is_available, prepare_layout, prewarm_layout, resolve};
 
@@ -65,9 +64,7 @@ impl XkbKeymap {
             group: DEFAULT_GROUP,
         };
         let groups = unsafe { (api.xkb_keymap_num_layouts)(keymap.map.as_ptr()) };
-        if let source::Source::Wayland { group, .. } | source::Source::Xwayland { group, .. } =
-            source
-        {
+        if let source::Source::Wayland { group, .. } = source {
             if groups > 1 {
                 keymap.group =
                     group.ok_or_else(|| anyhow!("Cannot determine the active XKB group"))?;
@@ -110,8 +107,7 @@ fn compile(api: &xkb::XkbCommon, source: &source::Source) -> ResultType<NonNull<
                 };
                 (api.xkb_keymap_new_from_names)(context.as_ptr(), &names, flags)
             }
-            source::Source::Wayland { keymap: bytes, .. }
-            | source::Source::Xwayland { keymap: bytes, .. } => (api.xkb_keymap_new_from_string)(
+            source::Source::Wayland { keymap: bytes, .. } => (api.xkb_keymap_new_from_string)(
                 context.as_ptr(),
                 bytes.as_ptr().cast(),
                 xkb::xkb_keymap_format::XKB_KEYMAP_FORMAT_TEXT_V1,

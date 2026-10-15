@@ -25,6 +25,9 @@ on:
       - "flatpak/**"
 
 jobs:
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+
   # ensure_cargo_fmt:
   #   name: Ensure 'cargo fmt' has been run
   #   runs-on: ubuntu-20.04
@@ -66,6 +69,7 @@ jobs:
   #       args: --locked
 
   build:
+    needs: [generate-bridge]
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     runs-on: ${{ matrix.job.os }}
     strategy:
@@ -111,6 +115,12 @@ jobs:
       with:
         submodules: recursive
 
+    - name: Download generated Flutter bridge
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: bridge-artifact
+        path: ./
+
     - name: Install prerequisites
       shell: bash
       run: |
@@ -132,10 +142,6 @@ jobs:
                libpulse-dev \
                libva-dev \
                libvdpau-dev \
-               libxcb-randr0-dev \
-               libxcb-shape0-dev \
-               libxcb-xfixes0-dev \
-               libxdo-dev \
                libxfixes-dev \
                nasm \
                wget

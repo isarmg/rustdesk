@@ -1,30 +1,17 @@
-use super::xdo::EnigoXdo;
-use crate::{Key, KeyboardControllable, MouseButton, MouseControllable, ResultType};
+use crate::{Key, KeyboardControllable, MouseButton, MouseControllable};
 use std::io::Read;
-use tfc::{traits::*, Context as TFC_Context, Key as TFC_Key};
 
 pub type CustomKeyboard = Box<dyn KeyboardControllable + Send>;
 pub type CustomMouce = Box<dyn MouseControllable + Send>;
 
-/// The main struct for handling the event emitting
-// #[derive(Default)]
+/// Input dispatch for the installed Wayland portal or uinput devices.
+#[derive(Default)]
 pub struct Enigo {
-    xdo: EnigoXdo,
-    is_x11: bool,
-    tfc: Option<TFC_Context>,
     custom_keyboard: Option<CustomKeyboard>,
     custom_mouse: Option<CustomMouce>,
 }
 
 impl Enigo {
-    /// Get delay of xdo implementation.
-    pub fn delay(&self) -> u64 {
-        self.xdo.delay()
-    }
-    /// Set delay of xdo implementation.
-    pub fn set_delay(&mut self, delay: u64) {
-        self.xdo.set_delay(delay)
-    }
     /// Set custom keyboard.
     pub fn set_custom_keyboard(&mut self, custom_keyboard: CustomKeyboard) {
         self.custom_keyboard = Some(custom_keyboard)
@@ -41,180 +28,86 @@ impl Enigo {
     pub fn get_custom_mouse(&mut self) -> &mut Option<CustomMouce> {
         &mut self.custom_mouse
     }
-
-    /// Override the display server guessed in `Default::default`: on "x11" every method here
-    /// routes to `xdo`, and a null xdo context makes all of them silent no-ops. A caller
-    /// installing custom devices knows better than the guess.
-    pub fn set_is_x11(&mut self, is_x11: bool) {
-        self.is_x11 = is_x11;
-    }
-
-    /// Clear remapped keycodes
-    pub fn tfc_clear_remapped(&mut self) {
-        if let Some(tfc) = &mut self.tfc {
-            tfc.recover_remapped_keycodes();
-        }
-    }
-
-    fn tfc_key_click(&mut self, key: Key) -> ResultType {
-        if let Some(tfc) = &mut self.tfc {
-            let res = match key {
-                Key::Layout(chr) => tfc.unicode_char(chr),
-                key => {
-                    let tfc_key: TFC_Key = match convert_to_tfc_key(key) {
-                        Some(key) => key,
-                        None => {
-                            return Err(format!("Failed to convert {:?} to TFC_Key", key).into());
-                        }
-                    };
-                    tfc.key_click(tfc_key)
-                }
-            };
-            if res.is_err() {
-                Err(format!("Failed to click {:?} by tfc", key).into())
-            } else {
-                Ok(())
-            }
-        } else {
-            Err("Not Found TFC".into())
-        }
-    }
-
-    fn tfc_key_down_or_up(&mut self, key: Key, down: bool, up: bool) -> bool {
-        match &mut self.tfc {
-            None => false,
-            Some(tfc) => {
-                if let Key::Layout(chr) = key {
-                    if down {
-                        if let Err(_) = tfc.unicode_char_down(chr) {
-                            return false;
-                        }
-                    }
-                    if up {
-                        if let Err(_) = tfc.unicode_char_up(chr) {
-                            return false;
-                        }
-                    }
-                    return true;
-                }
-                let key = match convert_to_tfc_key(key) {
-                    Some(key) => key,
-                    None => {
-                        return false;
-                    }
-                };
-
-                if down {
-                    if let Err(_) = tfc.key_down(key) {
-                        return false;
-                    }
-                };
-                if up {
-                    if let Err(_) = tfc.key_up(key) {
-                        return false;
-                    }
-                };
-                return true;
-            }
-        }
-    }
-}
-
-impl Default for Enigo {
-    fn default() -> Self {
-        let is_x11 = base::platform::linux::is_x11_or_headless();
-        Self {
-            is_x11,
-            tfc: if is_x11 {
-                match TFC_Context::new() {
-                    Ok(ctx) => Some(ctx),
-                    Err(..) => {
-                        println!("kbd context error");
-                        None
-                    }
-                }
-            } else {
-                None
-            },
-            custom_keyboard: None,
-            custom_mouse: None,
-            xdo: EnigoXdo::default(),
-        }
-    }
 }
 
 impl MouseControllable for Enigo {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-
     fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
-
     fn mouse_move_to(&mut self, x: i32, y: i32) {
-        if self.is_x11 {
-            self.xdo.mouse_move_to(x, y);
+        if let Some(mouse) = &mut self.custom_mouse {
+            mouse.mouse_move_to(x, y)
         } else {
-            if let Some(mouse) = &mut self.custom_mouse {
-                mouse.mouse_move_to(x, y)
-            }
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(5),
+                warn,
+                "Cannot inject input: Wayland mouse is not initialized"
+            );
         }
     }
     fn mouse_move_relative(&mut self, x: i32, y: i32) {
-        if self.is_x11 {
-            self.xdo.mouse_move_relative(x, y);
+        if let Some(mouse) = &mut self.custom_mouse {
+            mouse.mouse_move_relative(x, y)
         } else {
-            if let Some(mouse) = &mut self.custom_mouse {
-                mouse.mouse_move_relative(x, y)
-            }
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(5),
+                warn,
+                "Cannot inject input: Wayland mouse is not initialized"
+            );
         }
     }
     fn mouse_down(&mut self, button: MouseButton) -> crate::ResultType {
-        if self.is_x11 {
-            self.xdo.mouse_down(button)
+        if let Some(mouse) = &mut self.custom_mouse {
+            mouse.mouse_down(button)
         } else {
-            if let Some(mouse) = &mut self.custom_mouse {
-                mouse.mouse_down(button)
-            } else {
-                Ok(())
-            }
+            Err("Wayland mouse is not initialized".into())
         }
     }
     fn mouse_up(&mut self, button: MouseButton) {
-        if self.is_x11 {
-            self.xdo.mouse_up(button)
+        if let Some(mouse) = &mut self.custom_mouse {
+            mouse.mouse_up(button)
         } else {
-            if let Some(mouse) = &mut self.custom_mouse {
-                mouse.mouse_up(button)
-            }
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(5),
+                warn,
+                "Cannot inject input: Wayland mouse is not initialized"
+            );
         }
     }
     fn mouse_click(&mut self, button: MouseButton) {
-        if self.is_x11 {
-            self.xdo.mouse_click(button)
+        if let Some(mouse) = &mut self.custom_mouse {
+            mouse.mouse_click(button)
         } else {
-            if let Some(mouse) = &mut self.custom_mouse {
-                mouse.mouse_click(button)
-            }
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(5),
+                warn,
+                "Cannot inject input: Wayland mouse is not initialized"
+            );
         }
     }
     fn mouse_scroll_x(&mut self, length: i32) {
-        if self.is_x11 {
-            self.xdo.mouse_scroll_x(length)
+        if let Some(mouse) = &mut self.custom_mouse {
+            mouse.mouse_scroll_x(length)
         } else {
-            if let Some(mouse) = &mut self.custom_mouse {
-                mouse.mouse_scroll_x(length)
-            }
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(5),
+                warn,
+                "Cannot inject input: Wayland mouse is not initialized"
+            );
         }
     }
     fn mouse_scroll_y(&mut self, length: i32) {
-        if self.is_x11 {
-            self.xdo.mouse_scroll_y(length)
+        if let Some(mouse) = &mut self.custom_mouse {
+            mouse.mouse_scroll_y(length)
         } else {
-            if let Some(mouse) = &mut self.custom_mouse {
-                mouse.mouse_scroll_y(length)
-            }
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(5),
+                warn,
+                "Cannot inject input: Wayland mouse is not initialized"
+            );
         }
     }
 }
@@ -244,156 +137,60 @@ impl KeyboardControllable for Enigo {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-
     fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
-
     fn get_key_state(&mut self, key: Key) -> bool {
-        if self.is_x11 {
-            self.xdo.get_key_state(key)
+        if let Some(keyboard) = &mut self.custom_keyboard {
+            keyboard.get_key_state(key)
         } else {
-            if let Some(keyboard) = &mut self.custom_keyboard {
-                keyboard.get_key_state(key)
-            } else {
-                get_led_state(key)
-            }
+            get_led_state(key)
         }
     }
-
-    /// Warning: Get 6^ in French.
     fn key_sequence(&mut self, sequence: &str) {
-        if self.is_x11 {
-            self.xdo.key_sequence(sequence)
+        if let Some(keyboard) = &mut self.custom_keyboard {
+            keyboard.key_sequence(sequence)
         } else {
-            if let Some(keyboard) = &mut self.custom_keyboard {
-                keyboard.key_sequence(sequence)
-            } else {
-                log::warn!("Enigo::key_sequence: no custom_keyboard set for Wayland!");
-            }
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(5),
+                warn,
+                "Cannot inject input: Wayland keyboard is not initialized"
+            );
         }
     }
-
     fn key_down(&mut self, key: Key) -> crate::ResultType {
-        if self.is_x11 {
-            let has_down = self.tfc_key_down_or_up(key, true, false);
-            if !has_down {
-                self.xdo.key_down(key)
-            } else {
-                Ok(())
-            }
+        if let Some(keyboard) = &mut self.custom_keyboard {
+            keyboard.key_down(key)
         } else {
-            if let Some(keyboard) = &mut self.custom_keyboard {
-                keyboard.key_down(key)
-            } else {
-                log::warn!("Enigo::key_down: no custom_keyboard set for Wayland!");
-                Ok(())
-            }
+            Err("Wayland keyboard is not initialized".into())
         }
     }
     fn key_up(&mut self, key: Key) {
-        if self.is_x11 {
-            let has_down = self.tfc_key_down_or_up(key, false, true);
-            if !has_down {
-                self.xdo.key_up(key)
-            }
+        if let Some(keyboard) = &mut self.custom_keyboard {
+            keyboard.key_up(key)
         } else {
-            if let Some(keyboard) = &mut self.custom_keyboard {
-                keyboard.key_up(key)
-            } else {
-                log::warn!("Enigo::key_up: no custom_keyboard set for Wayland!");
-            }
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(5),
+                warn,
+                "Cannot inject input: Wayland keyboard is not initialized"
+            );
         }
     }
     fn key_click(&mut self, key: Key) {
-        if self.is_x11 {
-            // X11: try tfc first, then fallback to key_down/key_up
-            if self.tfc_key_click(key).is_err() {
-                self.key_down(key).ok();
-                self.key_up(key);
-            }
+        if let Some(keyboard) = &mut self.custom_keyboard {
+            keyboard.key_click(key)
         } else {
-            if let Some(keyboard) = &mut self.custom_keyboard {
-                keyboard.key_click(key);
-            } else {
-                log::warn!("Enigo::key_click: no custom_keyboard set for Wayland!");
-            }
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(5),
+                warn,
+                "Cannot inject input: Wayland keyboard is not initialized"
+            );
         }
     }
 }
 
-fn convert_to_tfc_key(key: Key) -> Option<TFC_Key> {
-    let key = match key {
-        Key::Alt => TFC_Key::Alt,
-        Key::Backspace => TFC_Key::DeleteOrBackspace,
-        Key::CapsLock => TFC_Key::CapsLock,
-        Key::Control => TFC_Key::Control,
-        Key::Delete => TFC_Key::ForwardDelete,
-        Key::DownArrow => TFC_Key::DownArrow,
-        Key::End => TFC_Key::End,
-        Key::Escape => TFC_Key::Escape,
-        Key::F1 => TFC_Key::F1,
-        Key::F10 => TFC_Key::F10,
-        Key::F11 => TFC_Key::F11,
-        Key::F12 => TFC_Key::F12,
-        Key::F2 => TFC_Key::F2,
-        Key::F3 => TFC_Key::F3,
-        Key::F4 => TFC_Key::F4,
-        Key::F5 => TFC_Key::F5,
-        Key::F6 => TFC_Key::F6,
-        Key::F7 => TFC_Key::F7,
-        Key::F8 => TFC_Key::F8,
-        Key::F9 => TFC_Key::F9,
-        Key::Home => TFC_Key::Home,
-        Key::LeftArrow => TFC_Key::LeftArrow,
-        Key::PageDown => TFC_Key::PageDown,
-        Key::PageUp => TFC_Key::PageUp,
-        Key::Return => TFC_Key::ReturnOrEnter,
-        Key::RightArrow => TFC_Key::RightArrow,
-        Key::Shift => TFC_Key::Shift,
-        Key::Space => TFC_Key::Space,
-        Key::Tab => TFC_Key::Tab,
-        Key::UpArrow => TFC_Key::UpArrow,
-        Key::Numpad0 => TFC_Key::N0,
-        Key::Numpad1 => TFC_Key::N1,
-        Key::Numpad2 => TFC_Key::N2,
-        Key::Numpad3 => TFC_Key::N3,
-        Key::Numpad4 => TFC_Key::N4,
-        Key::Numpad5 => TFC_Key::N5,
-        Key::Numpad6 => TFC_Key::N6,
-        Key::Numpad7 => TFC_Key::N7,
-        Key::Numpad8 => TFC_Key::N8,
-        Key::Numpad9 => TFC_Key::N9,
-        Key::Decimal => TFC_Key::NumpadDecimal,
-        Key::Clear => TFC_Key::NumpadClear,
-        Key::Pause => TFC_Key::Pause,
-        Key::Print => TFC_Key::Print,
-        Key::Snapshot => TFC_Key::PrintScreen,
-        Key::Insert => TFC_Key::Insert,
-        Key::Scroll => TFC_Key::ScrollLock,
-        Key::NumLock => TFC_Key::NumLock,
-        Key::RWin => TFC_Key::Meta,
-        Key::Apps => TFC_Key::Apps,
-        Key::Multiply => TFC_Key::NumpadMultiply,
-        Key::Add => TFC_Key::NumpadPlus,
-        Key::Subtract => TFC_Key::NumpadMinus,
-        Key::Divide => TFC_Key::NumpadDivide,
-        Key::Equals => TFC_Key::NumpadEquals,
-        Key::NumpadEnter => TFC_Key::NumpadEnter,
-        Key::RightShift => TFC_Key::RightShift,
-        Key::RightControl => TFC_Key::RightControl,
-        Key::RightAlt => TFC_Key::RightAlt,
-        Key::Command | Key::Super | Key::Windows | Key::Meta => TFC_Key::Meta,
-        _ => {
-            return None;
-        }
-    };
-    Some(key)
-}
-
-/// Both directions: the failure is silent, so a one-directional test passes against the bug.
 #[test]
-fn test_custom_mouse_dispatch_follows_is_x11() {
+fn test_custom_mouse_dispatch() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -422,20 +219,54 @@ fn test_custom_mouse_dispatch_follows_is_x11() {
     let mut en = Enigo::new();
     en.set_custom_mouse(Box::new(CountingMouse(calls.clone())));
 
-    en.set_is_x11(false);
     en.mouse_move_to(10, 20);
     assert_eq!(
         calls.load(Ordering::Relaxed),
         1,
-        "custom mouse was not reached on the non-x11 branch"
+        "custom mouse was not reached"
     );
+}
 
-    // Negative control: on the x11 branch the custom device must be bypassed entirely.
-    en.set_is_x11(true);
-    en.mouse_move_to(30, 40);
+#[test]
+fn test_uninitialized_devices_return_errors() {
+    let mut en = Enigo::new();
+    assert!(en.key_down(Key::Layout('a')).is_err());
+    assert!(en.mouse_down(MouseButton::Left).is_err());
+}
+
+#[test]
+fn test_custom_keyboard_dispatch_preserves_failure() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct FailingKeyboard(Arc<AtomicUsize>);
+    impl KeyboardControllable for FailingKeyboard {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+        fn get_key_state(&mut self, _key: Key) -> bool {
+            false
+        }
+        fn key_sequence(&mut self, _sequence: &str) {}
+        fn key_down(&mut self, _key: Key) -> crate::ResultType {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Err("device unavailable".into())
+        }
+        fn key_up(&mut self, _key: Key) {}
+        fn key_click(&mut self, _key: Key) {}
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut en = Enigo::new();
+    en.set_custom_keyboard(Box::new(FailingKeyboard(calls.clone())));
     assert_eq!(
-        calls.load(Ordering::Relaxed),
-        1,
-        "custom mouse was reached on the x11 branch"
+        en.key_down(Key::Layout('a')).unwrap_err().to_string(),
+        "device unavailable"
     );
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 }

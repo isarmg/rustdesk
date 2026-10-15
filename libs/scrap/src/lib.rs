@@ -11,10 +11,7 @@ pub use common::*;
 #[cfg(quartz)]
 pub mod quartz;
 
-#[cfg(x11)]
-pub mod x11;
-
-#[cfg(all(x11, feature = "wayland"))]
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub mod wayland;
 
 #[cfg(dxgi)]

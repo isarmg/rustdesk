@@ -10,10 +10,8 @@
 # enigo
 Cross platform input simulation in Rust!
 
-- [x] Linux (X11) mouse
-- [x] Linux (X11) text
-- [ ] Linux (Wayland) mouse
-- [ ] Linux (Wayland) text
+- [x] Linux (Wayland) mouse via an installed portal or uinput device
+- [x] Linux (Wayland) text via an installed portal or uinput device
 - [x] MacOS mouse
 - [x] MacOS text
 - [x] Win mouse
@@ -34,13 +32,7 @@ for more look at examples
 Runtime dependencies
 --------------------
 
-Linux users may have to install libxdo-dev. For example, on Ubuntu:
-
-```Bash
-apt install libxdo-dev
-```
-On Arch: 
-
-```Bash
-pacman -S xdotool
-```
+Linux callers must install an authorized Wayland portal or uinput keyboard and
+mouse using `set_custom_keyboard` and `set_custom_mouse` before injecting input.
+RustDesk initializes these devices through its Wayland session setup. X11 and
+libxdo input backends are not supported.

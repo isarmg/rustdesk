@@ -45,7 +45,6 @@ const CORE_MAIN_EXIT_FAILURE: i32 = 1;
 // Do not remove the following constants.
 // Uncomment them when they are used.
 // pub(crate) const APP_TYPE_DESKTOP_REMOTE: &str = "remote";
-// pub(crate) const APP_TYPE_DESKTOP_FILE_TRANSFER: &str = "file transfer";
 // pub(crate) const APP_TYPE_DESKTOP_PORT_FORWARD: &str = "port forward";
 
 pub type FlutterSession = Arc<Session<FlutterHandler>>;
@@ -755,114 +754,6 @@ impl InvokeUiSession for FlutterHandler {
         self.push_event("fingerprint", &[("fingerprint", &fingerprint)], &[]);
     }
 
-    fn job_error(&self, id: i32, err: String, file_num: i32) {
-        self.push_event(
-            "job_error",
-            &[
-                ("id", &id.to_string()),
-                ("err", &err),
-                ("file_num", &file_num.to_string()),
-            ],
-            &[],
-        );
-    }
-
-    fn job_done(&self, id: i32, file_num: i32) {
-        self.push_event(
-            "job_done",
-            &[("id", &id.to_string()), ("file_num", &file_num.to_string())],
-            &[],
-        );
-    }
-
-    // unused in flutter
-    fn clear_all_jobs(&self) {}
-
-    fn load_last_job(&self, _cnt: i32, job_json: &str, _auto_start: bool) {
-        self.push_event("load_last_job", &[("value", job_json)], &[]);
-    }
-
-    fn update_folder_files(
-        &self,
-        id: i32,
-        entries: &Vec<FileEntry>,
-        path: String,
-        #[allow(unused_variables)] is_local: bool,
-        only_count: bool,
-    ) {
-        // TODO opt
-        if only_count {
-            self.push_event(
-                "update_folder_files",
-                &[("info", &make_fd_flutter(id, entries, only_count))],
-                &[],
-            );
-        } else {
-            self.push_event(
-                "file_dir",
-                &[
-                    ("is_local", "false"),
-                    ("value", &crate::common::make_fd_to_json(id, path, entries)),
-                ],
-                &[],
-            );
-        }
-    }
-
-    fn update_empty_dirs(&self, res: ReadEmptyDirsResponse) {
-        self.push_event(
-            "empty_dirs",
-            &[
-                ("is_local", "false"),
-                (
-                    "value",
-                    &crate::common::make_empty_dirs_response_to_json(&res),
-                ),
-            ],
-            &[],
-        );
-    }
-
-    // unused in flutter
-    fn update_transfer_list(&self) {}
-
-    // unused in flutter // TEST flutter
-    fn confirm_delete_files(&self, _id: i32, _i: i32, _name: String) {}
-
-    fn override_file_confirm(
-        &self,
-        id: i32,
-        file_num: i32,
-        to: String,
-        is_upload: bool,
-        is_identical: bool,
-    ) {
-        self.push_event(
-            "override_file_confirm",
-            &[
-                ("id", &id.to_string()),
-                ("file_num", &file_num.to_string()),
-                ("read_path", &to),
-                ("is_upload", &is_upload.to_string()),
-                ("is_identical", &is_identical.to_string()),
-            ],
-            &[],
-        );
-    }
-
-    fn job_progress(&self, id: i32, file_num: i32, speed: f64, finished_size: f64) {
-        self.push_event(
-            "job_progress",
-            &[
-                ("id", &id.to_string()),
-                ("file_num", &file_num.to_string()),
-                ("speed", &speed.to_string()),
-                ("finished_size", &finished_size.to_string()),
-            ],
-            &[],
-        );
-    }
-
     // unused in flutter
     fn adapt_size(&self) {}
 
@@ -1011,10 +902,6 @@ impl InvokeUiSession for FlutterHandler {
         self.push_event("cancel_msgbox", &[("tag", tag)], &[]);
     }
 
-    fn new_message(&self, msg: String) {
-        self.push_event("chat_client_mode", &[("text", &msg)], &[]);
-    }
-
     fn switch_display(&self, display: &SwitchDisplay) {
         let resolutions = serialize_resolutions(&display.resolutions.resolutions);
         self.push_event(
@@ -1075,22 +962,6 @@ impl InvokeUiSession for FlutterHandler {
         );
     }
 
-    fn on_voice_call_started(&self) {
-        self.push_event::<&str>("on_voice_call_started", &[], &[]);
-    }
-
-    fn on_voice_call_closed(&self, reason: &str) {
-        let _res = self.push_event("on_voice_call_closed", &[("reason", reason)], &[]);
-    }
-
-    fn on_voice_call_waiting(&self) {
-        self.push_event::<&str>("on_voice_call_waiting", &[], &[]);
-    }
-
-    fn on_voice_call_incoming(&self) {
-        self.push_event::<&str>("on_voice_call_incoming", &[], &[]);
-    }
-
     #[inline]
     fn get_rgba(&self, _display: usize) -> *const u8 {
         if let Some(rgba_data) = self.display_rgbas.read().unwrap().get(&_display) {
@@ -1108,18 +979,6 @@ impl InvokeUiSession for FlutterHandler {
         }
     }
 
-    fn update_record_status(&self, start: bool) {
-        self.push_event("record_status", &[("start", &start.to_string())], &[]);
-    }
-
-    fn printer_request(&self, id: i32, path: String) {
-        self.push_event(
-            "printer_request",
-            &[("id", json!(id)), ("path", json!(path))],
-            &[],
-        );
-    }
-
     fn handle_screenshot_resp(&self, sid: String, msg: String) {
         match SessionID::from_str(&sid) {
             Ok(sid) => self.push_event_to("screenshot", &[("msg", json!(msg))], &[&sid]),
@@ -1130,66 +989,6 @@ impl InvokeUiSession for FlutterHandler {
         }
     }
 
-    fn handle_terminal_response(&self, response: TerminalResponse) {
-        use base::message_proto::terminal_response::Union;
-
-        match response.union {
-            Some(Union::Opened(opened)) => {
-                let mut event_data: Vec<(&str, serde_json::Value)> = vec![
-                    ("type", json!("opened")),
-                    ("terminal_id", json!(opened.terminal_id)),
-                    ("success", json!(opened.success)),
-                    ("message", json!(&opened.message)),
-                    ("pid", json!(opened.pid)),
-                    ("service_id", json!(&opened.service_id)),
-                    (
-                        "replay_terminal_output",
-                        json!(opened.replay_terminal_output),
-                    ),
-                ];
-                if !opened.persistent_sessions.is_empty() {
-                    event_data.push(("persistent_sessions", json!(opened.persistent_sessions)));
-                }
-                self.push_event_("terminal_response", &event_data, &[], &[]);
-            }
-            Some(Union::Data(data)) => {
-                // Decompress data if needed
-                let output_data = if data.compressed {
-                    hbb_common::compress::decompress(&data.data)
-                } else {
-                    data.data.to_vec()
-                };
-
-                let encoded = crate::encode64(&output_data);
-                let event_data: Vec<(&str, serde_json::Value)> = vec![
-                    ("type", json!("data")),
-                    ("terminal_id", json!(data.terminal_id)),
-                    ("data", json!(&encoded)),
-                ];
-                self.push_event_("terminal_response", &event_data, &[], &[]);
-            }
-            Some(Union::Closed(closed)) => {
-                let event_data: Vec<(&str, serde_json::Value)> = vec![
-                    ("type", json!("closed")),
-                    ("terminal_id", json!(closed.terminal_id)),
-                    ("exit_code", json!(closed.exit_code)),
-                ];
-                self.push_event_("terminal_response", &event_data, &[], &[]);
-            }
-            Some(Union::Error(error)) => {
-                let event_data: Vec<(&str, serde_json::Value)> = vec![
-                    ("type", json!("error")),
-                    ("terminal_id", json!(error.terminal_id)),
-                    ("message", json!(&error.message)),
-                ];
-                self.push_event_("terminal_response", &event_data, &[], &[]);
-            }
-            None => {}
-            Some(_) => {
-                log::warn!("Unhandled terminal response type");
-            }
-        }
-    }
 }
 
 impl FlutterHandler {
@@ -1271,13 +1070,8 @@ pub fn session_add_existed(
     peer_id: String,
     session_id: SessionID,
     displays: Vec<i32>,
-    is_view_camera: bool,
 ) -> ResultType<()> {
-    let conn_type = if is_view_camera {
-        ConnType::VIEW_CAMERA
-    } else {
-        ConnType::DEFAULT_CONN
-    };
+    let conn_type = ConnType::DEFAULT_CONN;
     sessions::insert_peer_session_id(peer_id, conn_type, session_id, displays);
     Ok(())
 }
@@ -1287,38 +1081,16 @@ pub fn session_add_existed(
 /// # Arguments
 ///
 /// * `id` - The identifier of the remote session with prefix. Regex: [\w]*[\_]*[\d]+
-/// * `is_file_transfer` - If the session is used for file transfer.
-/// * `is_view_camera` - If the session is used for view camera.
-/// * `is_port_forward` - If the session is used for port forward.
 pub fn session_add(
     session_id: &SessionID,
     id: &str,
-    is_file_transfer: bool,
-    is_view_camera: bool,
-    is_port_forward: bool,
-    is_rdp: bool,
-    is_terminal: bool,
     switch_uuid: &str,
     force_relay: bool,
     password: String,
     is_shared_password: bool,
     conn_token: Option<String>,
 ) -> ResultType<FlutterSession> {
-    let conn_type = if is_file_transfer {
-        ConnType::FILE_TRANSFER
-    } else if is_view_camera {
-        ConnType::VIEW_CAMERA
-    } else if is_terminal {
-        ConnType::TERMINAL
-    } else if is_port_forward {
-        if is_rdp {
-            ConnType::RDP
-        } else {
-            ConnType::PORT_FORWARD
-        }
-    } else {
-        ConnType::DEFAULT_CONN
-    };
+    let conn_type = ConnType::DEFAULT_CONN;
 
     // to-do: check the same id session.
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
@@ -1343,7 +1115,6 @@ pub fn session_add(
     let session: Session<FlutterHandler> = Session {
         password: preset_password,
         server_keyboard_enabled: Arc::new(RwLock::new(true)),
-        server_file_transfer_enabled: Arc::new(RwLock::new(true)),
         server_clipboard_enabled: Arc::new(RwLock::new(true)),
         reconnect_count: Arc::new(AtomicUsize::new(0)),
         ..Default::default()
@@ -1442,28 +1213,19 @@ pub fn update_text_clipboard_required() {
     Client::set_is_text_clipboard_required(is_required);
 }
 
-#[cfg(feature = "unix-file-copy-paste")]
-pub fn update_file_clipboard_required() {
-    let is_required = sessions::get_sessions()
-        .iter()
-        .filter(|s| s.connection_round_state.lock().unwrap().is_connected())
-        .any(|s| s.is_default() && s.is_file_clipboard_required());
-    Client::set_is_file_clipboard_required(is_required);
-}
-
 #[cfg(not(target_os = "ios"))]
-pub fn send_clipboard_msg(msg: Message, _is_file: bool) {
-    send_clipboard_msg_impl(msg, _is_file, None);
+pub fn send_clipboard_msg(msg: Message) {
+    send_clipboard_msg_impl(msg, None);
 }
 
 // `except_session_id` is the session the content came from, to avoid sending it back.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn send_clipboard_msg_to_other_sessions(msg: Message, except_session_id: u64) {
-    send_clipboard_msg_impl(msg, false, Some(except_session_id));
+    send_clipboard_msg_impl(msg, Some(except_session_id));
 }
 
 #[cfg(not(target_os = "ios"))]
-fn send_clipboard_msg_impl(msg: Message, _is_file: bool, except_session_id: Option<u64>) {
+fn send_clipboard_msg_impl(msg: Message, except_session_id: Option<u64>) {
     for s in sessions::get_sessions() {
         if !s.is_default() {
             continue;
@@ -1472,15 +1234,6 @@ fn send_clipboard_msg_impl(msg: Message, _is_file: bool, except_session_id: Opti
             if s.lc.read().unwrap().session_id == except_session_id {
                 continue;
             }
-        }
-        #[cfg(feature = "unix-file-copy-paste")]
-        if _is_file {
-            if crate::is_support_file_copy_paste_num(s.lc.read().unwrap().version)
-                && s.is_file_clipboard_required()
-            {
-                s.send(Data::Message(msg.clone()));
-            }
-            continue;
         }
         if s.is_text_clipboard_required() {
             // Check if the client supports multi clipboards
@@ -1520,7 +1273,6 @@ pub mod connection_manager {
     struct FlutterHandler {}
 
     impl InvokeUiCM for FlutterHandler {
-        //TODO port_forward
         fn add_connection(&self, client: &crate::ui_cm_interface::Client) {
             let client_json = serde_json::to_string(&client).unwrap_or("".into());
             // send to Android service, active notification no matter UI is shown or not.
@@ -1541,13 +1293,6 @@ pub mod connection_manager {
             );
         }
 
-        fn new_message(&self, id: i32, text: String) {
-            self.push_event(
-                "chat_server_mode",
-                &[("id", &id.to_string()), ("text", &text)],
-            );
-        }
-
         fn change_theme(&self, dark: String) {
             self.push_event("theme", &[("dark", &dark)]);
         }
@@ -1560,21 +1305,6 @@ pub mod connection_manager {
             self.push_event("show_elevation", &[("show", &show.to_string())]);
         }
 
-        fn update_voice_call_state(&self, client: &crate::ui_cm_interface::Client) {
-            let client_json = serde_json::to_string(&client).unwrap_or("".into());
-            // send to Android service, active notification no matter UI is shown or not.
-            #[cfg(target_os = "android")]
-            if let Err(e) =
-                call_main_service_set_by_name("update_voice_call_state", Some(&client_json), None)
-            {
-                log::debug!("call_main_service_set_by_name fail,{}", e);
-            }
-            self.push_event("update_voice_call_state", &[("client", &client_json)]);
-        }
-
-        fn file_transfer_log(&self, action: &str, log: &str) {
-            self.push_event("cm_file_transfer_log", &[(action, log)]);
-        }
     }
 
     impl FlutterHandler {
@@ -1632,33 +1362,6 @@ pub mod connection_manager {
         };
         std::thread::spawn(move || start_listen(cm, rx, tx));
     }
-}
-
-pub fn make_fd_flutter(id: i32, entries: &Vec<FileEntry>, only_count: bool) -> String {
-    let mut m = serde_json::Map::new();
-    m.insert("id".into(), json!(id));
-    let mut a = vec![];
-    let mut n: u64 = 0;
-    for entry in entries {
-        n += entry.size;
-        if only_count {
-            continue;
-        }
-        let mut e = serde_json::Map::new();
-        e.insert("name".into(), json!(entry.name.to_owned()));
-        let tmp = entry.entry_type.value();
-        e.insert("type".into(), json!(if tmp == 0 { 1 } else { tmp }));
-        e.insert("time".into(), json!(entry.modified_time as f64));
-        e.insert("size".into(), json!(entry.size as f64));
-        a.push(e);
-    }
-    if only_count {
-        m.insert("num_entries".into(), json!(entries.len() as i32));
-    } else {
-        m.insert("entries".into(), json!(a));
-    }
-    m.insert("total_size".into(), json!(n as f64));
-    serde_json::to_string(&m).unwrap_or("".into())
 }
 
 pub fn get_cur_session_id() -> SessionID {

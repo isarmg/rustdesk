@@ -131,14 +131,7 @@ fn has_no_controlling_conns() -> bool {
 #[cfg(not(any(not(target_os = "windows"), feature = "flutter")))]
 fn has_no_controlling_conns() -> bool {
     let app_exe = format!("{}.exe", crate::get_app_name().to_lowercase());
-    for arg in [
-        "--connect",
-        "--play",
-        "--file-transfer",
-        "--view-camera",
-        "--port-forward",
-        "--rdp",
-    ] {
+    for arg in ["--connect", "--play"] {
         if !crate::platform::get_pids_of_process_with_first_arg(&app_exe, arg).is_empty() {
             return false;
         }
@@ -381,7 +374,7 @@ fn update_new_version(update_msi: bool, version: &str, file_path: &PathBuf, expe
     }
 }
 
-/// Queries all active connections (remote, file-transfer, port-forward, camera, terminal)
+/// Queries all active remote-desktop connections
 /// from every logged-in user's --server process via IPC.
 /// The root service cannot read connection state directly since connections
 /// live in user --server processes. Handles fast user switching by querying

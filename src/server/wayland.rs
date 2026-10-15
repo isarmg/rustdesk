@@ -9,13 +9,7 @@ use scrap::{
 use std::collections::HashMap;
 use std::io;
 
-use crate::{
-    client::{
-        SCRAP_OTHER_VERSION_OR_X11_REQUIRED, SCRAP_UBUNTU_HIGHER_REQUIRED,
-        SCRAP_X11_REQUIRED, SCRAP_XDP_PORTAL_UNAVAILABLE,
-    },
-    platform::linux::is_x11,
-};
+use crate::client::{SCRAP_UBUNTU_HIGHER_REQUIRED, SCRAP_XDP_PORTAL_UNAVAILABLE};
 
 lazy_static::lazy_static! {
     static ref CAP_DISPLAY_INFO: RwLock<HashMap<usize, u64>> = RwLock::new(HashMap::new());
@@ -80,9 +74,9 @@ fn map_err_scrap(err: String) -> io::Error {
             // xdg-desktop-portal has crashed... for more info, see: Issue #12897
             io::Error::new(io::ErrorKind::Other, SCRAP_XDP_PORTAL_UNAVAILABLE)
         } else if err_lower.contains("pipewire") {
-            io::Error::new(io::ErrorKind::Other, SCRAP_OTHER_VERSION_OR_X11_REQUIRED)
+            io::Error::new(io::ErrorKind::Other, WAYLAND_NO_USABLE_SCREEN)
         } else {
-            io::Error::new(io::ErrorKind::Other, SCRAP_X11_REQUIRED)
+            io::Error::new(io::ErrorKind::Other, WAYLAND_UNSUPPORTED)
         }
     }
 }
@@ -397,9 +391,7 @@ pub(super) async fn ensure_inited() -> ResultType<()> {
 }
 
 pub(super) fn is_inited() -> Option<Message> {
-    if is_x11() {
-        None
-    } else {
+    {
         #[cfg(feature = "drm")]
         if super::drm_capturer::is_available_cached() {
             return None;
@@ -424,7 +416,10 @@ pub(super) fn is_inited() -> Option<Message> {
 }
 
 pub(super) async fn check_init() -> ResultType<()> {
-    if !is_x11() {
+    if !crate::platform::linux::is_wayland_session_available() {
+        bail!("Screen sharing requires an active Wayland session");
+    }
+    {
         // try_read for the same reason as is_inited; when busy, the same look waits off the worker.
         let looked = CAP_DISPLAY_INFO.try_read().map(|map| map.is_empty()).ok();
         let empty = match looked {
@@ -639,9 +634,6 @@ pub(super) async fn get_displays_and_primary() -> ResultType<(Vec<DisplayInfo>, 
 }
 
 pub fn clear() {
-    if is_x11() {
-        return;
-    }
     // The DRM path augments its geometry from the compositor's Wayland outputs (logical origin +
     // scale), which scrap caches process-wide. The PipeWire path clears that cache on session close,
     // but the DRM path opens no PipeWire session, so without this it would keep matching DRM outputs
@@ -723,8 +715,8 @@ async fn ensure_pipewire_inited() -> ResultType<()> {
 pub(super) fn get_capturer_for_display(
     display_idx: usize,
 ) -> ResultType<super::video_service::CapturerInfo> {
-    if is_x11() {
-        bail!("Do not call this function if not wayland");
+    if !crate::platform::linux::is_wayland_session_available() {
+        bail!("Screen sharing requires an active Wayland session");
     }
     // DRM/KMS capture path: build the capturer straight from the service `_drm` stream, bypassing
     // the PipeWire CAP_DISPLAY_INFO machinery entirely. `is_available()` is a GLOBAL verdict, so a

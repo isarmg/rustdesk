@@ -2,8 +2,6 @@
 use crate::flutter;
 #[cfg(target_os = "windows")]
 use crate::platform::windows::{get_char_from_vk, get_unicode_from_vk};
-#[cfg(not(feature = "flutter"))]
-use crate::ui::CUR_SESSION;
 use crate::ui_session_interface::{InvokeUiSession, Session};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::{client::get_key_state, common::GrabState};
@@ -90,64 +88,22 @@ pub mod client {
     /// Multiple Flutter isolates (one per session window) call
     /// `change_grab_status(Run/Wait)` concurrently. Without serialization a
     /// stale `Wait` from session A can clobber session B's freshly acquired
-    /// grab on any desktop OS.
-    ///
-    /// Windows and macOS are less susceptible in practice because the Flutter
-    /// side triggers `enterView` only after a mouse click inside the window,
-    /// but we cannot rely on that. On Linux/X11, `XGrabKeyboard` can also
-    /// cause a focus-change feedback loop (~10 Hz), so `last_grab` debounces
-    /// spurious `Wait` events that arrive shortly after a `Run`.
+    /// grab on Windows or macOS.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[derive(Default)]
     struct GrabOwnerState {
         owner: Option<u128>,
         last_grab: Option<std::time::Instant>,
-        /// True while a deferred-release thread is in flight. Prevents
-        /// spawning redundant threads during the X11 feedback loop.
         deferred_pending: bool,
     }
 
-    /// How long after a grab acquisition we suppress Wait from the same session.
-    /// Must exceed one full X11 feedback cycle (~100 ms: 50 ms enable + 50 ms disable).
-    #[cfg(target_os = "linux")]
-    const GRAB_DEBOUNCE_MS: u128 = 300;
-
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     lazy_static::lazy_static! {
         static ref IS_GRAB_STARTED: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
         static ref GRAB_STATE: Arc<Mutex<GrabOwnerState>> = Arc::new(Mutex::new(GrabOwnerState::default()));
     }
 
-    #[cfg(target_os = "linux")]
-    lazy_static::lazy_static! {
-        static ref GRAB_OP_LOCK: Mutex<()> = Mutex::new(());
-    }
-
-    #[cfg(target_os = "linux")]
-    fn apply_run_grab_if_owner(session_id: u128, disable_first: bool) {
-        let _lock = GRAB_OP_LOCK.lock().unwrap();
-        let gs = GRAB_STATE.lock().unwrap();
-        if gs.owner != Some(session_id) {
-            return;
-        }
-        drop(gs);
-        if disable_first {
-            log::debug!("[grab] handoff: disable_grab before re-grab");
-            rdev::disable_grab();
-        }
-        rdev::enable_grab();
-    }
-
-    #[cfg(target_os = "linux")]
-    fn disable_grab_if_released() {
-        let _lock = GRAB_OP_LOCK.lock().unwrap();
-        let should_disable = {
-            let gs = GRAB_STATE.lock().unwrap();
-            gs.owner.is_none() && gs.last_grab.is_none()
-        };
-        if should_disable {
-            rdev::disable_grab();
-        }
-    }
-
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn start_grab_loop() {
         let mut lock = IS_GRAB_STARTED.lock().unwrap();
         if *lock {
@@ -157,7 +113,10 @@ pub mod client {
         *lock = true;
     }
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(target_os = "linux")]
+    pub fn change_grab_status(_state: GrabState, _keyboard_mode: &str, _session_id: u128) {}
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     pub fn change_grab_status(state: GrabState, keyboard_mode: &str, session_id: u128) {
         #[cfg(feature = "flutter")]
         if !IS_RDEV_ENABLED.load(Ordering::SeqCst) {
@@ -166,10 +125,7 @@ pub mod client {
         // Serialize transitions so a stale `Wait` from a previous owner cannot
         // clobber a fresh `Run` from a different session window.
         let mut release_after_unlock = None;
-        #[cfg(target_os = "linux")]
-        let mut run_grab_after_unlock = None;
-        #[cfg(target_os = "linux")]
-        let mut disable_after_unlock = false;
+
         let mut gs = GRAB_STATE.lock().unwrap();
         match state {
             GrabState::Ready => {}
@@ -203,17 +159,12 @@ pub mod client {
                 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
                 KEYBOARD_HOOKED.store(true, Ordering::SeqCst);
 
-                #[cfg(target_os = "linux")]
-                let had_owner = gs.owner.is_some();
                 gs.owner = Some(session_id);
                 gs.last_grab = Some(std::time::Instant::now());
                 // Invalidate any in-flight deferred release from the previous
                 // owner so it cannot suppress a fresh timer for the new owner.
                 gs.deferred_pending = false;
-                #[cfg(target_os = "linux")]
-                {
-                    run_grab_after_unlock = Some(had_owner);
-                }
+
             }
             GrabState::Wait => {
                 // Drop stale `Wait` events that do not correspond to the
@@ -229,64 +180,6 @@ pub mod client {
                     return;
                 }
 
-                // Debounce: on Linux/X11, XGrabKeyboard causes a focus-change
-                // feedback loop (grab -> PointerExit -> ungrab -> PointerEnter ->
-                // grab -> ...). Suppress Wait if the grab was acquired recently
-                // by this same session -- it is X11 feedback, not a real leave.
-                // A deferred release is scheduled so that a genuine leave within
-                // the debounce window is not permanently lost.
-                #[cfg(target_os = "linux")]
-                if let Some(t) = gs.last_grab {
-                    let elapsed = t.elapsed().as_millis();
-                    if elapsed < GRAB_DEBOUNCE_MS {
-                        if !gs.deferred_pending {
-                            log::debug!(
-                                "[grab] Wait(0x{:x}): debounced ({}ms < {}ms), scheduling deferred release",
-                                session_id, elapsed, GRAB_DEBOUNCE_MS,
-                            );
-                            gs.deferred_pending = true;
-                            let remaining = (GRAB_DEBOUNCE_MS - elapsed) as u64 + 50;
-                            let snapshot = gs.last_grab;
-                            let mode = keyboard_mode.to_string();
-                            std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(remaining));
-                                let release_keys = {
-                                    let mut gs = GRAB_STATE.lock().unwrap();
-                                    // Release only if no new Run has refreshed the grab since.
-                                    if gs.owner == Some(session_id) && gs.last_grab == snapshot {
-                                        let to_release = take_remote_keys();
-                                        gs.deferred_pending = false;
-                                        log::debug!(
-                                            "[grab] Wait(0x{:x}): deferred release",
-                                            session_id
-                                        );
-                                        KEYBOARD_HOOKED.store(false, Ordering::SeqCst);
-                                        gs.owner = None;
-                                        gs.last_grab = None;
-                                        Some(to_release)
-                                    } else {
-                                        log::debug!(
-                                            "[grab] Wait(0x{:x}): deferred release cancelled (grab refreshed)",
-                                            session_id,
-                                        );
-                                        None
-                                    }
-                                };
-                                if let Some(to_release) = release_keys {
-                                    disable_grab_if_released();
-                                    release_remote_keys_for_events(&mode, to_release);
-                                }
-                            });
-                        } else {
-                            log::debug!(
-                                "[grab] Wait(0x{:x}): debounced, deferred release already pending",
-                                session_id,
-                            );
-                        }
-                        return;
-                    }
-                }
-
                 log::debug!("[grab] Wait(0x{:x}): releasing grab", session_id);
 
                 #[cfg(windows)]
@@ -299,23 +192,12 @@ pub mod client {
                 gs.last_grab = None;
                 gs.deferred_pending = false;
                 release_after_unlock = Some(take_remote_keys());
-                #[cfg(target_os = "linux")]
-                {
-                    disable_after_unlock = true;
-                }
+
             }
             GrabState::Exit => {}
         }
         drop(gs);
-        #[cfg(target_os = "linux")]
-        {
-            if disable_after_unlock {
-                disable_grab_if_released();
-            }
-            if let Some(disable_first) = run_grab_after_unlock {
-                apply_run_grab_if_owner(session_id, disable_first);
-            }
-        }
+
         if let Some(to_release) = release_after_unlock {
             release_remote_keys_for_events(keyboard_mode, to_release);
         }
@@ -523,10 +405,6 @@ static mut IS_LEFT_OPTION_DOWN: bool = false;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn get_keyboard_mode() -> String {
-    #[cfg(not(feature = "flutter"))]
-    if let Some(session) = CUR_SESSION.lock().unwrap().as_ref() {
-        return session.get_keyboard_mode();
-    }
     #[cfg(feature = "flutter")]
     if let Some(session) = flutter::get_cur_session() {
         return session.get_keyboard_mode();
@@ -663,6 +541,7 @@ fn should_block_relative_mouse_shortcut(key: Key, is_press: bool) -> bool {
     false
 }
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn start_grab_loop() {
     std::env::set_var("KEYBOARD_ONLY", "y");
     #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -737,34 +616,16 @@ fn start_grab_loop() {
         }
     });
 
-    #[cfg(target_os = "linux")]
-    if let Err(err) = rdev::start_grab_listen(move |event: Event| match event.event_type {
-        EventType::KeyPress(key) | EventType::KeyRelease(key) => {
-            let is_press = matches!(event.event_type, EventType::KeyPress(_));
-            if let Key::Unknown(keycode) = key {
-                log::error!("rdev get unknown key, keycode is {:?}", keycode);
-            } else {
-                #[cfg(feature = "flutter")]
-                if should_block_relative_mouse_shortcut(key, is_press) {
-                    return None;
-                }
-                client::process_event(&get_keyboard_mode(), &event, None);
-            }
-            None
-        }
-        _ => Some(event),
-    }) {
-        log::error!("Failed to init rdev grab thread: {:?}", err);
-    };
+    ;
 }
 
 // #[allow(dead_code)] is ok here. No need to stop grabbing loop.
 #[allow(dead_code)]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn stop_grab_loop() -> Result<(), rdev::GrabError> {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     rdev::exit_grab()?;
-    #[cfg(target_os = "linux")]
-    rdev::exit_grab_listen();
+
     Ok(())
 }
 
@@ -1049,11 +910,6 @@ pub fn event_to_key_events(
 }
 
 pub fn send_key_event(key_event: &KeyEvent) {
-    #[cfg(not(feature = "flutter"))]
-    if let Some(session) = CUR_SESSION.lock().unwrap().as_ref() {
-        session.send_key_event(key_event);
-    }
-
     #[cfg(feature = "flutter")]
     if let Some(session) = flutter::get_cur_session() {
         session.send_key_event(key_event);
@@ -1061,10 +917,6 @@ pub fn send_key_event(key_event: &KeyEvent) {
 }
 
 pub fn get_peer_platform() -> String {
-    #[cfg(not(feature = "flutter"))]
-    if let Some(session) = CUR_SESSION.lock().unwrap().as_ref() {
-        return session.peer_platform();
-    }
     #[cfg(feature = "flutter")]
     if let Some(session) = flutter::get_cur_session() {
         return session.peer_platform();
@@ -1604,6 +1456,7 @@ pub mod input_source {
     use hbb_common::log;
     use hbb_common::SessionID;
 
+    #[cfg(not(target_os = "linux"))]
     use crate::ui_interface::{get_local_option, set_local_option};
 
     pub const CONFIG_OPTION_INPUT_SOURCE: &str = "input-source";
@@ -1616,13 +1469,31 @@ pub mod input_source {
 
     pub const CONFIG_INPUT_SOURCE_DEFAULT: &str = CONFIG_INPUT_SOURCE_1;
 
-    pub fn init_input_source() {
-        #[cfg(target_os = "linux")]
-        if !crate::platform::linux::is_x11() {
-            // If switching from X11 to Wayland, the grab loop will not be started.
-            // Do not change the config here.
-            return;
+    #[cfg(target_os = "linux")]
+    pub fn init_input_source() {}
+
+    #[cfg(target_os = "linux")]
+    pub fn change_input_source(_session_id: SessionID, input_source: String) {
+        if input_source != CONFIG_INPUT_SOURCE_2 {
+            hbb_common::log::warn!("Wayland supports only the Flutter input source");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn get_cur_session_input_source() -> String {
+        CONFIG_INPUT_SOURCE_2.to_string()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn get_supported_input_source() -> Vec<(String, String)> {
+        vec![(
+            CONFIG_INPUT_SOURCE_2.to_string(),
+            CONFIG_INPUT_SOURCE_2_TIP.to_string(),
+        )]
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn init_input_source() {
         #[cfg(target_os = "macos")]
         if !crate::platform::macos::is_can_input_monitoring(false) {
             log::error!("init_input_source, is_can_input_monitoring() false");
@@ -1639,6 +1510,7 @@ pub mod input_source {
         super::client::start_grab_loop();
     }
 
+    #[cfg(not(target_os = "linux"))]
     pub fn change_input_source(session_id: SessionID, input_source: String) {
         let cur_input_source = get_cur_session_input_source();
         if cur_input_source == input_source {
@@ -1663,11 +1535,8 @@ pub mod input_source {
     }
 
     #[inline]
+    #[cfg(not(target_os = "linux"))]
     pub fn get_cur_session_input_source() -> String {
-        #[cfg(target_os = "linux")]
-        if !crate::platform::linux::is_x11() {
-            return CONFIG_INPUT_SOURCE_2.to_string();
-        }
         let input_source = get_local_option(CONFIG_OPTION_INPUT_SOURCE.to_string());
         if input_source.is_empty() {
             CONFIG_INPUT_SOURCE_DEFAULT.to_string()
@@ -1677,14 +1546,8 @@ pub mod input_source {
     }
 
     #[inline]
+    #[cfg(not(target_os = "linux"))]
     pub fn get_supported_input_source() -> Vec<(String, String)> {
-        #[cfg(target_os = "linux")]
-        if !crate::platform::linux::is_x11() {
-            return vec![(
-                CONFIG_INPUT_SOURCE_2.to_string(),
-                CONFIG_INPUT_SOURCE_2_TIP.to_string(),
-            )];
-        }
         vec![
             (
                 CONFIG_INPUT_SOURCE_1.to_string(),

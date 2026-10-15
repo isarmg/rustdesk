@@ -32,12 +32,9 @@ use crate::{
     is_keyboard_mode_supported,
     kcp_stream::KcpStream,
     secure_tcp, secure_tcp_required,
-    ui_interface::{get_builtin_option, resolve_avatar_url, use_texture_render},
+    ui_interface::{get_builtin_option, use_texture_render},
     ui_session_interface::{InvokeUiSession, Session},
 };
-#[cfg(feature = "unix-file-copy-paste")]
-use crate::{clipboard::check_clipboard_files, clipboard_file::unix_file_clip};
-pub use file_trait::FileManager;
 #[cfg(not(feature = "flutter"))]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::tokio::sync::mpsc::UnboundedSender;
@@ -73,13 +70,11 @@ use hbb_common::{
 };
 use base::{
     config::keys,
-    fs::JobType,
     message_proto::{option_message::BoolOption, *},
 };
 pub use helper::*;
 use scrap::{
     codec::Decoder,
-    record::{Recorder, RecorderContext},
     CodecFormat, ImageFormat, ImageRgb, ImageTexture,
 };
 
@@ -100,10 +95,11 @@ mod audio_playback_recovery;
 #[cfg(all(test, not(target_os = "linux")))]
 #[path = "client/tests/audio_state_tests.rs"]
 mod audio_state_tests;
-pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
+mod presentation;
 pub mod screenshot;
+mod streaming;
 
 pub const MILLI1: Duration = Duration::from_millis(1);
 pub const SEC30: Duration = Duration::from_secs(30);
@@ -142,8 +138,6 @@ pub(crate) struct ClientClipboardContext;
 pub(crate) struct ClientClipboardContext {
     pub cfg: SessionPermissionConfig,
     pub tx: UnboundedSender<Data>,
-    #[cfg(feature = "unix-file-copy-paste")]
-    pub is_file_supported: bool,
 }
 
 /// Client of the remote desktop.
@@ -153,8 +147,6 @@ pub struct Client;
 struct ClipboardState {
     #[cfg(feature = "flutter")]
     is_text_required: bool,
-    #[cfg(all(feature = "flutter", feature = "unix-file-copy-paste"))]
-    is_file_required: bool,
     running: bool,
 }
 
@@ -376,6 +368,9 @@ impl Client {
         ),
         (i32, String),
     )> {
+        if conn_type != ConnType::DEFAULT_CONN {
+            bail!("Unsupported session type");
+        }
         debug_assert!(peer == interface.get_id());
         interface.update_direct(None);
         interface.update_received(false);
@@ -1877,12 +1872,6 @@ impl Client {
         CLIPBOARD_STATE.lock().unwrap().is_text_required = b;
     }
 
-    #[inline]
-    #[cfg(all(feature = "flutter", feature = "unix-file-copy-paste"))]
-    pub fn set_is_file_clipboard_required(b: bool) {
-        CLIPBOARD_STATE.lock().unwrap().is_file_required = b;
-    }
-
     #[cfg(not(target_os = "ios"))]
     fn try_stop_clipboard() {
         // Disconnected Flutter sessions may keep UI handlers alive, so only connected sessions
@@ -1894,15 +1883,6 @@ impl Client {
         #[cfg(not(target_os = "android"))]
         clipboard_listener::unsubscribe(Self::CLIENT_CLIPBOARD_NAME);
         CLIPBOARD_STATE.lock().unwrap().running = false;
-        #[cfg(all(feature = "unix-file-copy-paste", target_os = "linux"))]
-        if let Err(e) = crate::clipboard::try_empty_clipboard_files_sync(
-            crate::clipboard::ClipboardSide::Client,
-            0,
-        ) {
-            log::error!("Failed to empty client clipboard files: {}", e);
-        }
-        #[cfg(all(feature = "unix-file-copy-paste", target_os = "linux"))]
-        clipboard::platform::unix::fuse::uninit_fuse_context(true);
     }
 
     // `try_start_clipboard` is called by all session when connection is established. (When handling peer info).
@@ -1947,11 +1927,6 @@ impl Client {
                     Ok(ClipboardEvent::Changed) => {
                         handler.check_clipboard(true);
                     }
-                    #[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-                    Ok(ClipboardEvent::InitialSelection) => {
-                        // Preserve file startup sync without bypassing text initial-sync settings.
-                        handler.check_clipboard(false);
-                    }
                     Ok(ClipboardEvent::Stop) => {
                         log::debug!("Clipboard listener stopped");
                         break;
@@ -1994,7 +1969,7 @@ impl Client {
                 }
 
                 if let Some(msg) = crate::clipboard::get_clipboards_msg(true) {
-                    crate::flutter::send_clipboard_msg(msg, false);
+                    crate::flutter::send_clipboard_msg(msg);
                 }
 
                 std::thread::sleep(Duration::from_millis(CLIPBOARD_INTERVAL));
@@ -2013,8 +1988,6 @@ impl ClipboardState {
         Self {
             #[cfg(feature = "flutter")]
             is_text_required: true,
-            #[cfg(all(feature = "flutter", feature = "unix-file-copy-paste"))]
-            is_file_required: true,
             running: false,
         }
     }
@@ -2043,50 +2016,11 @@ impl ClientClipboardHandler {
         }
     }
 
-    #[cfg(feature = "unix-file-copy-paste")]
-    fn is_file_required(&self) -> bool {
-        #[cfg(feature = "flutter")]
-        {
-            CLIPBOARD_STATE.lock().unwrap().is_file_required
-        }
-        #[cfg(not(feature = "flutter"))]
-        {
-            self.client_clip_ctx
-                .as_ref()
-                .map(|ctx| ctx.cfg.is_file_clipboard_required())
-                .unwrap_or(false)
-        }
-    }
-
     fn check_clipboard(&mut self, check_text: bool) {
         if CLIPBOARD_STATE.lock().unwrap().running {
-            #[cfg(feature = "unix-file-copy-paste")]
-            if self.is_file_required() {
-                if let Some(urls) = check_clipboard_files(&mut self.ctx, ClipboardSide::Client, false) {
-                    if !urls.is_empty() {
-                        #[cfg(target_os = "macos")]
-                        if crate::clipboard::is_file_url_set_by_rustdesk(&urls) {
-                            return;
-                        }
-                        match clipboard::platform::unix::serv_files::sync_files(&urls) {
-                            Ok(()) => {
-                                let msg = crate::clipboard_file::clip_2_msg(
-                                    unix_file_clip::get_format_list(),
-                                );
-                                self.send_msg(msg, true);
-                            }
-                            Err(e) => {
-                                log::error!("Failed to sync clipboard files: {}", e);
-                            }
-                        }
-                        return;
-                    }
-                }
-            }
-
             if check_text && self.is_text_required() {
                 if let Some(msg) = check_clipboard(&mut self.ctx, ClipboardSide::Client, false) {
-                    self.send_msg(msg, false);
+                    self.send_msg(msg);
                 }
             }
         }
@@ -2094,21 +2028,13 @@ impl ClientClipboardHandler {
 
     #[inline]
     #[cfg(feature = "flutter")]
-    fn send_msg(&self, msg: Message, _is_file: bool) {
-        crate::flutter::send_clipboard_msg(msg, _is_file);
+    fn send_msg(&self, msg: Message) {
+        crate::flutter::send_clipboard_msg(msg);
     }
 
     #[cfg(not(feature = "flutter"))]
-    fn send_msg(&self, msg: Message, _is_file: bool) {
+    fn send_msg(&self, msg: Message) {
         if let Some(ctx) = &self.client_clip_ctx {
-            #[cfg(feature = "unix-file-copy-paste")]
-            if _is_file {
-                if ctx.is_file_supported {
-                    let _ = ctx.tx.send(Data::Message(msg));
-                }
-                return;
-            }
-
             let pi = ctx.cfg.lc.read().unwrap().peer_info.clone();
             if let Some(pi) = pi.as_ref() {
                 if let Some(message::Union::MultiClipboards(multi_clipboards)) = &msg.union {
@@ -2632,8 +2558,6 @@ pub struct VideoHandler {
     decoder: Decoder,
     pub rgb: ImageRgb,
     pub texture: ImageTexture,
-    recorder: Arc<Mutex<Option<Recorder>>>,
-    record: bool,
     _display: usize, // useful for debug
     fail_counter: usize,
     first_frame: bool,
@@ -2664,8 +2588,6 @@ impl VideoHandler {
             decoder: Decoder::new(format, luid),
             rgb: ImageRgb::new(rgba_format, crate::get_dst_align_rgba()),
             texture: Default::default(),
-            recorder: Default::default(),
-            record: false,
             _display,
             fail_counter: 0,
             first_frame: true,
@@ -2710,16 +2632,6 @@ impl VideoHandler {
                     }
                 }
                 self.first_frame = false;
-                if self.record {
-                    self.recorder.lock().unwrap().as_mut().map(|r| {
-                        let (w, h) = if *pixelbuffer {
-                            (self.rgb.w, self.rgb.h)
-                        } else {
-                            (self.texture.w, self.texture.h)
-                        };
-                        r.write_frame(frame, w, h).ok();
-                    });
-                }
                 res
             }
             _ => Ok(false),
@@ -2741,25 +2653,6 @@ impl VideoHandler {
         self.first_frame = true;
     }
 
-    /// Start or stop screen record.
-    pub fn record_screen(&mut self, start: bool, id: String, display_idx: usize, camera: bool) {
-        self.record = false;
-        if start {
-            self.recorder = Recorder::new(RecorderContext {
-                server: false,
-                id,
-                dir: crate::ui_interface::video_save_directory(false),
-                display_idx,
-                camera,
-                tx: None,
-            })
-            .map_or(Default::default(), |r| Arc::new(Mutex::new(Some(r))));
-        } else {
-            self.recorder = Default::default();
-        }
-
-        self.record = start;
-    }
 }
 
 // The source of sent password
@@ -2821,24 +2714,10 @@ struct ConnToken {
 pub struct LoginConfigHandler {
     id: String,
     pub conn_type: ConnType,
-    pub is_terminal_admin: bool,
     hash: Hash,
     password: Vec<u8>, // remember password for reconnect
     pub remember: bool,
     config: PeerConfig,
-    pub port_forward: (String, i32),
-    /// This login's `multiplex`, filled with `port_forward` under the turn
-    /// lock. `port_forward_mux` says whether a mapping probes for the tunnel;
-    /// one the probe latched to the raw pipe logs in without asking, so an
-    /// upgraded peer keeps giving it the raw pipe.
-    pub(crate) port_forward_multiplex: bool,
-    /// Set once per window, before its mappings start: every accept's claim
-    /// reads it.
-    pub(crate) port_forward_mux: bool,
-    /// Held by a port-forward mapping from filling `port_forward` and `hash`
-    /// until its login is built from them; a window's mappings log in
-    /// concurrently.
-    pub(crate) port_forward_login_turn: Arc<hbb_common::tokio::sync::Mutex<()>>,
     pub version: i64,
     features: Option<Features>,
     pub session_id: u64, // used for local <-> server communication
@@ -2871,8 +2750,6 @@ pub struct LoginConfigHandler {
     password_source: PasswordSource, // where the sent password comes from
     shared_password: Option<String>, // Store the shared password
     pub enable_trusted_devices: bool,
-    pub record_state: bool,
-    pub record_permission: bool,
 }
 
 impl Deref for LoginConfigHandler {
@@ -2992,13 +2869,6 @@ impl LoginConfigHandler {
         self.adapter_luid = adapter_luid;
         self.selected_windows_session_id = None;
         self.shared_password = shared_password;
-        self.record_state = false;
-        self.record_permission = true;
-
-        // `std::env::remove_var("IS_TERMINAL_ADMIN");` is called in `session_add_sync()` - `flutter_ffi.rs`.
-        let is_terminal_admin = conn_type == ConnType::TERMINAL
-            && std::env::var("IS_TERMINAL_ADMIN").map_or(false, |v| v == "Y");
-        self.is_terminal_admin = is_terminal_admin;
     }
 
     #[cfg(feature = "flutter")]
@@ -3237,28 +3107,12 @@ impl LoginConfigHandler {
                 BoolOption::No
             })
             .into();
-        } else if name == keys::OPTION_TERMINAL_PERSISTENT {
-            config.terminal_persistent.v = !config.terminal_persistent.v;
-            option.terminal_persistent = (if config.terminal_persistent.v {
-                BoolOption::Yes
-            } else {
-                BoolOption::No
-            })
-            .into();
         } else if name == "privacy-mode" {
             // try toggle privacy mode
             option.privacy_mode = (if config.privacy_mode.v {
                 BoolOption::No
             } else {
                 BoolOption::Yes
-            })
-            .into();
-        } else if name == "enable-file-copy-paste" {
-            config.enable_file_copy_paste.v = !config.enable_file_copy_paste.v;
-            option.enable_file_transfer = (if config.enable_file_copy_paste.v {
-                BoolOption::Yes
-            } else {
-                BoolOption::No
             })
             .into();
         } else if name == "block-input" {
@@ -3282,13 +3136,11 @@ impl LoginConfigHandler {
                 option.disable_keyboard = f(true);
                 option.disable_clipboard = f(true);
                 option.show_remote_cursor = f(true);
-                option.enable_file_transfer = f(false);
                 option.lock_after_session_end = f(false);
             } else {
                 option.disable_keyboard = f(false);
                 option.disable_clipboard = f(self.get_toggle_option("disable-clipboard"));
                 option.show_remote_cursor = f(self.get_toggle_option("show-remote-cursor"));
-                option.enable_file_transfer = f(self.config.enable_file_copy_paste.v);
                 option.lock_after_session_end = f(self.config.lock_after_session_end.v);
                 if config.show_my_cursor.v {
                     config.show_my_cursor.v = false;
@@ -3318,11 +3170,6 @@ impl LoginConfigHandler {
             return None;
         }
 
-        #[cfg(feature = "unix-file-copy-paste")]
-        if option.enable_file_transfer.enum_value() == Ok(BoolOption::No) {
-            crate::clipboard::try_empty_clipboard_files(crate::clipboard::ClipboardSide::Client, 0);
-        }
-
         if !name.contains("block-input") {
             self.save_config(config);
         }
@@ -3341,27 +3188,12 @@ impl LoginConfigHandler {
     }
 
     /// Get [`OptionMessage`] of the current [`LoginConfigHandler`].
-    /// Return `None` if there's no option, for example, when the session is only for file transfer.
     ///
     /// # Arguments
     ///
     /// * `ignore_default` - If `true`, ignore the default value of the option.
     fn get_option_message(&self, ignore_default: bool) -> Option<OptionMessage> {
-        if self.conn_type.eq(&ConnType::PORT_FORWARD)
-            || self.conn_type.eq(&ConnType::RDP)
-            || self.conn_type.eq(&ConnType::FILE_TRANSFER)
-        {
-            return None;
-        }
         let mut msg = OptionMessage::new();
-        if self.conn_type.eq(&ConnType::TERMINAL) {
-            if self.get_toggle_option(keys::OPTION_TERMINAL_PERSISTENT) {
-                msg.terminal_persistent = BoolOption::Yes.into();
-                return Some(msg);
-            } else {
-                return None;
-            }
-        }
         let q = self.image_quality.clone();
         if let Some(q) = self.get_image_quality_enum(&q, ignore_default) {
             msg.image_quality = q.into();
@@ -3388,6 +3220,10 @@ impl LoginConfigHandler {
                 *self.custom_fps.lock().unwrap() = Some(custom_fps as _);
             }
         }
+        if self.streaming_enabled() {
+            msg.custom_fps = self.streaming_target_fps();
+            *self.custom_fps.lock().unwrap() = Some(msg.custom_fps as _);
+        }
         let view_only = self.get_toggle_option("view-only");
         if view_only {
             msg.disable_keyboard = BoolOption::Yes.into();
@@ -3409,9 +3245,6 @@ impl LoginConfigHandler {
         }
         if self.get_toggle_option("disable-audio") {
             msg.disable_audio = BoolOption::Yes.into();
-        }
-        if !view_only && self.get_toggle_option(keys::OPTION_ENABLE_FILE_COPY_PASTE) {
-            msg.enable_file_transfer = BoolOption::Yes.into();
         }
         if view_only || self.get_toggle_option("disable-clipboard") {
             msg.disable_clipboard = BoolOption::Yes.into();
@@ -3466,12 +3299,8 @@ impl LoginConfigHandler {
             self.config.show_remote_cursor.v
         } else if name == "lock-after-session-end" {
             self.config.lock_after_session_end.v
-        } else if name == keys::OPTION_TERMINAL_PERSISTENT {
-            self.config.terminal_persistent.v
         } else if name == "privacy-mode" {
             self.config.privacy_mode.v
-        } else if name == keys::OPTION_ENABLE_FILE_COPY_PASTE {
-            self.config.enable_file_copy_paste.v
         } else if name == "disable-audio" {
             self.config.disable_audio.v
         } else if name == "disable-clipboard" {
@@ -3592,6 +3421,21 @@ impl LoginConfigHandler {
         }
         *self.custom_fps.lock().unwrap() = Some(fps as _);
         msg_out
+    }
+
+    pub fn streaming_enabled(&self) -> bool {
+        self.conn_type == ConnType::DEFAULT_CONN
+            && self.get_option(keys::OPTION_STREAMING_MODE) == "Y"
+    }
+
+    pub fn streaming_target_fps(&self) -> i32 {
+        streaming::target_fps(
+            self.streaming_enabled(),
+            &self.get_option(keys::OPTION_STREAMING_FPS),
+            &self.config.image_quality,
+            &self.get_option("custom-fps"),
+            !crate::using_public_server() || self.direct == Some(true),
+        )
     }
 
     pub fn get_option(&self, k: &str) -> String {
@@ -3738,30 +3582,11 @@ impl LoginConfigHandler {
         log::info!("peer info supported_encoding:{:?}", self.supported_encoding);
     }
 
-    pub fn get_remote_dir(&self) -> String {
-        serde_json::from_str::<HashMap<String, String>>(&self.get_option("remote_dir"))
-            .unwrap_or_default()
-            .remove(&self.info.username)
-            .unwrap_or_default()
-    }
-
-    pub fn get_all_remote_dir(&self, path: String) -> String {
-        let d = self.get_option("remote_dir");
-        let user = self.info.username.clone();
-        let mut x = serde_json::from_str::<HashMap<String, String>>(&d).unwrap_or_default();
-        if path.is_empty() {
-            x.remove(&user);
-        } else {
-            x.insert(user, path);
-        }
-        serde_json::to_string::<HashMap<String, String>>(&x).unwrap_or_default()
-    }
-
     /// Create a [`Message`] for login.
     fn create_login_msg(
         &self,
-        os_username: String,
-        os_password: String,
+        _os_username: String,
+        _os_password: String,
         password: Vec<u8>,
     ) -> Message {
         let my_id = Config::get_id();
@@ -3771,35 +3596,8 @@ impl LoginConfigHandler {
         } else {
             (my_id, self.id.clone())
         };
-        let mut avatar = get_builtin_option(keys::OPTION_AVATAR);
-        if avatar.is_empty() {
-            avatar = serde_json::from_str::<serde_json::Value>(&LocalConfig::get_option(
-                "user_info",
-            ))
-            .ok()
-            .and_then(|x| {
-                x.get("avatar")
-                    .and_then(|x| x.as_str())
-                    .map(|x| x.trim().to_owned())
-            })
-            .unwrap_or_default();
-        }
-        avatar = resolve_avatar_url(avatar);
+        let avatar = get_builtin_option(keys::OPTION_AVATAR);
         let mut display_name = get_builtin_option(keys::OPTION_DISPLAY_NAME);
-        if display_name.is_empty() {
-            display_name =
-                serde_json::from_str::<serde_json::Value>(&LocalConfig::get_option("user_info"))
-                    .map(|x| {
-                        x.get("display_name")
-                            .and_then(|x| x.as_str())
-                            .map(|x| x.trim())
-                            .filter(|x| !x.is_empty())
-                            .or_else(|| x.get("name").and_then(|x| x.as_str()))
-                            .map(|x| x.to_owned())
-                            .unwrap_or_default()
-                    })
-                    .unwrap_or_default();
-        }
         if display_name.is_empty() {
             display_name = crate::username();
         }
@@ -3828,17 +3626,7 @@ impl LoginConfigHandler {
         } else {
             Bytes::new()
         };
-        let os_login: MessageField<OSLogin> = if self.conn_type == ConnType::TERMINAL {
-            Some(OSLogin {
-                username: os_username,
-                password: os_password,
-                ..Default::default()
-            })
-            .into()
-        } else {
-            Default::default()
-        };
-        let mut lr = LoginRequest {
+        let lr = LoginRequest {
             username: pure_id,
             password: password.into(),
             my_id,
@@ -3847,32 +3635,10 @@ impl LoginConfigHandler {
             option: self.get_option_message(true).into(),
             session_id: self.session_id,
             version: crate::VERSION.to_string(),
-            os_login,
             hwid,
             avatar,
             ..Default::default()
         };
-        match self.conn_type {
-            ConnType::FILE_TRANSFER => lr.set_file_transfer(FileTransfer {
-                dir: self.get_remote_dir(),
-                show_hidden: !self.get_option("remote_show_hidden").is_empty(),
-                ..Default::default()
-            }),
-            ConnType::VIEW_CAMERA => lr.set_view_camera(Default::default()),
-            ConnType::PORT_FORWARD | ConnType::RDP => lr.set_port_forward(PortForward {
-                host: self.port_forward.0.clone(),
-                port: self.port_forward.1,
-                multiplex: self.port_forward_multiplex,
-                ..Default::default()
-            }),
-            ConnType::TERMINAL => {
-                let mut terminal = Terminal::new();
-                terminal.service_id = self.get_option(self.get_key_terminal_service_id());
-                lr.set_terminal(terminal);
-            }
-            _ => {}
-        }
-
         let mut msg_out = Message::new();
         msg_out.set_login_request(lr);
         msg_out
@@ -3943,13 +3709,6 @@ impl LoginConfigHandler {
         &self.id
     }
 
-    pub fn get_key_terminal_service_id(&self) -> &'static str {
-        if self.is_terminal_admin {
-            "terminal-admin-service-id"
-        } else {
-            "terminal-service-id"
-        }
-    }
 }
 
 /// Media data.
@@ -3959,7 +3718,6 @@ pub enum MediaData {
     AudioFrame(Box<AudioFrame>),
     AudioFormat(AudioFormat),
     Reset,
-    RecordScreen(bool),
 }
 
 pub type MediaSender = mpsc::Sender<MediaData>;
@@ -3984,7 +3742,6 @@ pub fn start_video_thread<F, T>(
 {
     let mut video_callback = video_callback;
     let mut last_chroma = None;
-    let is_view_camera = session.is_view_camera();
 
     std::thread::spawn(move || {
         #[cfg(windows)]
@@ -3994,6 +3751,7 @@ pub fn start_video_thread<F, T>(
         let mut count = 0;
         let mut duration = std::time::Duration::ZERO;
         let mut skip_beginning = 0;
+        let mut last_presented: Option<std::time::Instant> = None;
         loop {
             if let Ok(data) = video_receiver.recv() {
                 match data {
@@ -4022,13 +3780,7 @@ pub fn start_video_thread<F, T>(
                         let start = std::time::Instant::now();
                         let format = CodecFormat::from(&vf);
                         if video_handler.is_none() {
-                            let mut handler = VideoHandler::new(format, display);
-                            let record_state = session.lc.read().unwrap().record_state;
-                            let record_permission = session.lc.read().unwrap().record_permission;
-                            let id = session.lc.read().unwrap().id.clone();
-                            if record_state && record_permission {
-                                handler.record_screen(true, id, display, is_view_camera);
-                            }
+                            let handler = VideoHandler::new(format, display);
                             video_handler = Some(handler);
                         }
                         if let Some(handler) = video_handler.as_mut() {
@@ -4037,12 +3789,27 @@ pub fn start_video_thread<F, T>(
                             let format_changed = handler.decoder.format() != format;
                             match handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma) {
                                 Ok(true) => {
-                                    video_callback(
-                                        display,
-                                        &mut handler.rgb,
-                                        handler.texture.texture,
-                                        pixelbuffer,
-                                    );
+                                    let presentation_fps = {
+                                        let lc = session.lc.read().unwrap();
+                                        lc.streaming_enabled().then(|| lc.streaming_target_fps())
+                                    };
+                                    let present = presentation_fps.map_or(true, |fps| {
+                                        presentation::should_present(
+                                            true,
+                                            video_queue.read().unwrap().len(),
+                                            last_presented.map(|instant| instant.elapsed()),
+                                            Duration::from_secs_f64(1.0 / fps as f64),
+                                        )
+                                    });
+                                    if present {
+                                        video_callback(
+                                            display,
+                                            &mut handler.rgb,
+                                            handler.texture.texture,
+                                            pixelbuffer,
+                                        );
+                                        last_presented = Some(std::time::Instant::now());
+                                    }
 
                                     // chroma
                                     if tmp_chroma.is_some() && last_chroma != tmp_chroma {
@@ -4103,12 +3870,6 @@ pub fn start_video_thread<F, T>(
                     MediaData::Reset => {
                         if let Some(handler) = video_handler.as_mut() {
                             handler.reset(None);
-                        }
-                    }
-                    MediaData::RecordScreen(start) => {
-                        let id = session.lc.read().unwrap().id.clone();
-                        if let Some(handler) = video_handler.as_mut() {
-                            handler.record_screen(start, id, display, is_view_camera);
                         }
                     }
                     _ => {}
@@ -4724,18 +4485,6 @@ pub async fn handle_hash(
 
     lc.write().unwrap().password = password.clone();
 
-    let is_terminal_admin = lc.read().unwrap().is_terminal_admin;
-    let is_terminal = lc.read().unwrap().conn_type.eq(&ConnType::TERMINAL);
-    if is_terminal && is_terminal_admin {
-        if password.is_empty() {
-            interface.msgbox("terminal-admin-login-password", "", "", "");
-        } else {
-            interface.msgbox("terminal-admin-login", "", "", "");
-        }
-        lc.write().unwrap().hash = hash;
-        return true;
-    }
-
     let password = if password.is_empty() {
         // login without password, the remote side can click accept
         interface.msgbox("input-password", "Password Required", "", "");
@@ -4973,30 +4722,10 @@ pub enum Data {
     Message(Message),
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     InitialClipboard(usize, Option<Message>),
-    SendFiles((i32, JobType, String, String, i32, bool, bool)),
-    RemoveDirAll((i32, String, bool, bool)),
-    ConfirmDeleteFiles((i32, i32)),
-    SetNoConfirm(i32),
-    RemoveDir((i32, String)),
-    RemoveFile((i32, String, i32, bool)),
-    CreateDir((i32, String, bool)),
-    CancelJob(i32),
-    RemovePortForward(i32),
-    AddPortForward((i32, String, i32)),
-    #[cfg(all(target_os = "windows", not(feature = "flutter")))]
-    ToggleClipboardFile,
-    NewRDP,
-    SetConfirmOverrideFile((i32, i32, bool, bool, bool)),
-    AddJob((i32, JobType, String, String, i32, bool, bool)),
-    ResumeJob((i32, bool)),
-    RecordScreen(bool),
     ElevateDirect,
     ElevateWithLogon(String, String),
-    NewVoiceCall,
-    CloseVoiceCall,
     ContinueInsecureConnection,
     ResetDecoder(Option<usize>),
-    RenameFile((i32, String, String, bool)),
     TakeScreenshot((i32, String)),
 }
 

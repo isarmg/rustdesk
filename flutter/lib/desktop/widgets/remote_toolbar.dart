@@ -7,7 +7,6 @@ import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/keyboard_shortcuts/display.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
-import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -842,15 +841,7 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       state: widget.state,
       setFullscreen: _setFullscreen,
     ));
-    // Do not show keyboard for camera connection type.
-    if (widget.ffi.connType == ConnType.defaultConn) {
-      toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
-    }
-    toolbarItems.add(_ChatMenu(id: widget.id, ffi: widget.ffi));
-    if (!isWeb) {
-      toolbarItems.add(_VoiceCallMenu(id: widget.id, ffi: widget.ffi));
-    }
-    if (!isWeb) toolbarItems.add(_RecordMenu());
+    toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
     toolbarItems.add(_CloseMenu(id: widget.id, ffi: widget.ffi));
     final toolbarBorderRadius = BorderRadius.all(Radius.circular(4.0));
     // innerAxis: how the toolbar icons themselves flow.
@@ -1763,6 +1754,8 @@ class _DisplayMenuState extends State<_DisplayMenu> {
         viewStyle(customPercent: _customPercent),
         scrollStyle(state, colorScheme),
         imageQuality(),
+        if (!isWeb && isDesktop && ffi.connType == ConnType.defaultConn)
+          streamingMode(state),
         codec(),
         if (ffi.connType == ConnType.defaultConn)
           _ResolutionsMenu(
@@ -1963,6 +1956,55 @@ class _DisplayMenuState extends State<_DisplayMenu> {
             Divider(),
           ]));
     });
+  }
+
+  streamingMode(_IconSubmenuButtonState state) {
+    return futureBuilder(
+        future: Future.wait([
+          bind.sessionGetOption(
+              sessionId: ffi.sessionId, arg: kOptionStreamingMode),
+          bind.sessionGetOption(
+              sessionId: ffi.sessionId, arg: kOptionStreamingFps),
+        ]),
+        hasData: (data) {
+          final values = data as List<String?>;
+          final enabled = values[0] == 'Y';
+          final savedFps = int.tryParse(values[1] ?? '');
+          final fps = [60, 90, 120].contains(savedFps) ? savedFps! : 60;
+          Future<void> setOption(String key, String value) async {
+            await bind.sessionPeerOption(
+                sessionId: ffi.sessionId, name: key, value: value);
+            if (state.mounted) state.setState(() {});
+          }
+
+          return _SubmenuButton(
+              ffi: ffi,
+              child: Text(translate('Streaming mode')),
+              menuChildren: [
+                CkbMenuButton(
+                    ffi: ffi,
+                    value: enabled,
+                    child: Text(translate('Enable streaming mode')),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setOption(kOptionStreamingMode, value ? 'Y' : '');
+                      }
+                    }),
+                for (final target in [60, 90, 120])
+                  RdoMenuButton<int>(
+                      ffi: ffi,
+                      value: target,
+                      groupValue: fps,
+                      child: Text('$target FPS'),
+                      onChanged: enabled
+                          ? (value) {
+                              if (value != null) {
+                                setOption(kOptionStreamingFps, value.toString());
+                              }
+                            }
+                          : null),
+              ]);
+        });
   }
 
   imageQuality() {
@@ -2817,188 +2859,6 @@ class _KeyboardMenu extends StatelessWidget {
   }
 }
 
-class _ChatMenu extends StatefulWidget {
-  final String id;
-  final FFI ffi;
-  _ChatMenu({
-    Key? key,
-    required this.id,
-    required this.ffi,
-  }) : super(key: key);
-
-  @override
-  State<_ChatMenu> createState() => _ChatMenuState();
-}
-
-class _ChatMenuState extends State<_ChatMenu> {
-  // Using in StatelessWidget got `Looking up a deactivated widget's ancestor is unsafe`.
-  final chatButtonKey = GlobalKey();
-
-  @override
-  Widget build(BuildContext context) {
-    if (isWeb) {
-      return buildTextChatButton();
-    } else {
-      return _IconSubmenuButton(
-          tooltip: 'Chat',
-          key: chatButtonKey,
-          svg: 'assets/chat.svg',
-          ffi: widget.ffi,
-          color: _ToolbarTheme.blueColor,
-          hoverColor: _ToolbarTheme.hoverBlueColor,
-          menuChildrenGetter: (_) => [textChat(), voiceCall()]);
-    }
-  }
-
-  buildTextChatButton() {
-    return _IconMenuButton(
-      assetName: 'assets/message_24dp_5F6368.svg',
-      tooltip: 'Text chat',
-      key: chatButtonKey,
-      onPressed: _textChatOnPressed,
-      color: _ToolbarTheme.blueColor,
-      hoverColor: _ToolbarTheme.hoverBlueColor,
-    );
-  }
-
-  textChat() {
-    return MenuButton(
-        child: Text(translate('Text chat')),
-        ffi: widget.ffi,
-        onPressed: _textChatOnPressed);
-  }
-
-  _textChatOnPressed() {
-    RenderBox? renderBox =
-        chatButtonKey.currentContext?.findRenderObject() as RenderBox?;
-    Offset? initPos;
-    if (renderBox != null) {
-      final pos = renderBox.localToGlobal(Offset.zero);
-      initPos = Offset(pos.dx, pos.dy + _ToolbarTheme.dividerHeight);
-    }
-    widget.ffi.chatModel
-        .changeCurrentKey(MessageKey(widget.ffi.id, ChatModel.clientModeID));
-    widget.ffi.chatModel.toggleChatOverlay(chatInitPos: initPos);
-  }
-
-  voiceCall() {
-    return MenuButton(
-      child: Text(translate('Voice call')),
-      ffi: widget.ffi,
-      onPressed: () =>
-          bind.sessionRequestVoiceCall(sessionId: widget.ffi.sessionId),
-    );
-  }
-}
-
-class _VoiceCallMenu extends StatelessWidget {
-  final String id;
-  final FFI ffi;
-  _VoiceCallMenu({
-    Key? key,
-    required this.id,
-    required this.ffi,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    menuChildrenGetter(_IconSubmenuButtonState state) {
-      final audioInput = AudioInput(
-        builder: (devices, currentDevice, setDevice) {
-          return Column(
-            children: devices
-                .map((d) => RdoMenuButton<String>(
-                      child: Container(
-                        child: Text(
-                          d,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        constraints: BoxConstraints(maxWidth: 250),
-                      ),
-                      value: d,
-                      groupValue: currentDevice,
-                      onChanged: (v) {
-                        if (v != null) setDevice(v);
-                      },
-                      ffi: ffi,
-                    ))
-                .toList(),
-          );
-        },
-        isCm: false,
-        isVoiceCall: true,
-      );
-      return [
-        audioInput,
-        Divider(),
-        MenuButton(
-          child: Text(translate('End call')),
-          onPressed: () => bind.sessionCloseVoiceCall(sessionId: ffi.sessionId),
-          ffi: ffi,
-        ),
-      ];
-    }
-
-    return Obx(
-      () {
-        switch (ffi.chatModel.voiceCallStatus.value) {
-          case VoiceCallStatus.waitingForResponse:
-            return buildCallWaiting(context);
-          case VoiceCallStatus.connected:
-            return _IconSubmenuButton(
-              tooltip: 'Voice call',
-              svg: 'assets/voice_call.svg',
-              color: _ToolbarTheme.blueColor,
-              hoverColor: _ToolbarTheme.hoverBlueColor,
-              menuChildrenGetter: menuChildrenGetter,
-              ffi: ffi,
-            );
-          default:
-            return Offstage();
-        }
-      },
-    );
-  }
-
-  Widget buildCallWaiting(BuildContext context) {
-    return _IconMenuButton(
-      assetName: "assets/call_wait.svg",
-      tooltip: "Waiting",
-      onPressed: () => bind.sessionCloseVoiceCall(sessionId: ffi.sessionId),
-      color: _ToolbarTheme.redColor,
-      hoverColor: _ToolbarTheme.hoverRedColor,
-    );
-  }
-}
-
-class _RecordMenu extends StatelessWidget {
-  const _RecordMenu({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    var ffi = Provider.of<FfiModel>(context);
-    var recordingModel = Provider.of<RecordingModel>(context);
-    final hideRecordingButton =
-        bind.mainGetLocalOption(key: kOptionHideRecordingButton) == 'Y';
-    final visible = !hideRecordingButton &&
-        (recordingModel.start || ffi.permissions['recording'] != false);
-    if (!visible) return Offstage();
-    return _IconMenuButton(
-      assetName: 'assets/rec.svg',
-      tooltip: recordingModel.start
-          ? 'Stop session recording'
-          : 'Start session recording',
-      onPressed: () => recordingModel.toggle(),
-      color: recordingModel.start
-          ? _ToolbarTheme.redColor
-          : _ToolbarTheme.blueColor,
-      hoverColor: recordingModel.start
-          ? _ToolbarTheme.hoverRedColor
-          : _ToolbarTheme.hoverBlueColor,
-    );
-  }
-}
-
 class _CloseMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
@@ -3011,9 +2871,6 @@ class _CloseMenu extends StatelessWidget {
       assetName: 'assets/close.svg',
       tooltip: 'Close',
       onPressed: () async {
-        if (await showConnEndAuditDialogCloseCanceled(ffi: ffi)) {
-          return;
-        }
         closeConnection(id: id);
       },
       color: _ToolbarTheme.redColor,

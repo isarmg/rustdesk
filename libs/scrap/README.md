@@ -58,5 +58,5 @@ impl<'a> ops::Deref for Frame<'a> {
 OS      | Minimum Requirements
 --------|---------------------
 macOS   | macOS 10.8
-Linux   | XCB + SHM + RandR
+Linux   | Wayland + PipeWire + xdg-desktop-portal (`wayland` feature)
 Windows | DirectX 11.1

@@ -2006,11 +2006,9 @@ fn refresh_available_async() {
 }
 
 pub(super) fn warm_availability() {
-    // The gate is INSIDE the loop because `get_display_server()` answers "x11" whenever loginctl
-    // cannot yet name the seat0 session. `is_x11_for_drm()` is that form minus the greeter
-    // blind spot, where plain `is_x11()` is permanently true.
+    // Recheck during boot until logind identifies the Wayland session.
     for _ in 0..10 {
-        if crate::platform::linux::is_x11_for_drm() {
+        if !crate::platform::linux::is_wayland_session_available() {
             std::thread::sleep(Duration::from_millis(300));
             continue;
         }

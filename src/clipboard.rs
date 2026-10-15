@@ -10,8 +10,6 @@ use std::{
 };
 
 pub const CLIPBOARD_NAME: &'static str = "clipboard";
-#[cfg(feature = "unix-file-copy-paste")]
-pub const FILE_CLIPBOARD_NAME: &'static str = "file-clipboard";
 pub const CLIPBOARD_INTERVAL: u64 = 333;
 
 pub const OPTION_ALLOW_SYNC_CLIPBOARD_BETWEEN_SESSIONS: &str =
@@ -27,9 +25,6 @@ pub fn is_sync_clipboard_between_sessions_enabled() -> bool {
 
 // This format is used to store the flag in the clipboard.
 const RUSTDESK_CLIPBOARD_OWNER_FORMAT: &'static str = "dyn.com.rustdesk.owner";
-
-// Add special format for Excel XML Spreadsheet
-const CLIPBOARD_FORMAT_EXCEL_XML_SPREADSHEET: &'static str = "XML Spreadsheet";
 
 #[cfg(not(target_os = "android"))]
 lazy_static::lazy_static! {
@@ -47,27 +42,8 @@ const CLIPBOARD_GET_MAX_RETRY: usize = 3;
 const CLIPBOARD_GET_RETRY_INTERVAL_DUR: Duration = Duration::from_millis(33);
 
 #[cfg(not(target_os = "android"))]
-fn valid_rgba_dimensions(width: i32, height: i32, data_len: usize) -> Option<(usize, usize)> {
-    let width = usize::try_from(width).ok()?;
-    let height = usize::try_from(height).ok()?;
-    if width == 0 || height == 0 {
-        return None;
-    }
-    let expected_len = width.checked_mul(height)?.checked_mul(4)?;
-    (data_len == expected_len).then_some((width, height))
-}
-
-#[cfg(not(target_os = "android"))]
 const SUPPORTED_FORMATS: &[ClipboardFormat] = &[
     ClipboardFormat::Text,
-    ClipboardFormat::Html,
-    ClipboardFormat::Rtf,
-    ClipboardFormat::ImageRgba,
-    ClipboardFormat::ImagePng,
-    ClipboardFormat::ImageSvg,
-    #[cfg(feature = "unix-file-copy-paste")]
-    ClipboardFormat::FileUrl,
-    ClipboardFormat::Special(CLIPBOARD_FORMAT_EXCEL_XML_SPREADSHEET),
     ClipboardFormat::Special(RUSTDESK_CLIPBOARD_OWNER_FORMAT),
 ];
 
@@ -115,113 +91,6 @@ fn read_clipboard_message(
         }
     }
     None
-}
-
-#[cfg(all(feature = "unix-file-copy-paste", target_os = "macos"))]
-pub fn is_file_url_set_by_rustdesk(url: &Vec<String>) -> bool {
-    if url.len() != 1 {
-        return false;
-    }
-    url.iter()
-        .next()
-        .map(|s| {
-            for prefix in &["file:///tmp/.rustdesk_", "//tmp/.rustdesk_"] {
-                if s.starts_with(prefix) {
-                    return s[prefix.len()..].parse::<uuid::Uuid>().is_ok();
-                }
-            }
-            false
-        })
-        .unwrap_or(false)
-}
-
-#[cfg(feature = "unix-file-copy-paste")]
-pub fn check_clipboard_files(
-    ctx: &mut Option<ClipboardContext>,
-    side: ClipboardSide,
-    force: bool,
-) -> Option<Vec<String>> {
-    if ctx.is_none() {
-        *ctx = ClipboardContext::new().ok();
-    }
-    let ctx2 = ctx.as_mut()?;
-    match ctx2.get_files(side, force) {
-        Ok(Some(urls)) => {
-            if !urls.is_empty() {
-                return Some(urls);
-            }
-        }
-        Err(e) => {
-            log::error!("Failed to get clipboard file urls. {}", e);
-        }
-        _ => {}
-    }
-    None
-}
-
-#[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-pub fn update_clipboard_files(files: Vec<String>, side: ClipboardSide) {
-    if !files.is_empty() {
-        std::thread::spawn(move || {
-            do_update_clipboard_(vec![ClipboardData::FileUrl(files)], side);
-        });
-    }
-}
-
-#[cfg(feature = "unix-file-copy-paste")]
-pub fn try_empty_clipboard_files(_side: ClipboardSide, _conn_id: i32) {
-    std::thread::spawn(move || {
-        if let Err(e) = try_empty_clipboard_files_sync(_side, _conn_id) {
-            log::error!("Failed to empty clipboard files: {}", e);
-        }
-    });
-}
-
-#[cfg(feature = "unix-file-copy-paste")]
-pub fn try_empty_clipboard_files_sync(_side: ClipboardSide, _conn_id: i32) -> ResultType<()> {
-    let mut ctx = CLIPBOARD_CTX.lock().unwrap();
-    if ctx.is_none() {
-        match ClipboardContext::new() {
-            Ok(x) => {
-                *ctx = Some(x);
-            }
-            Err(e) => {
-                log::error!("Failed to create clipboard context: {}", e);
-                bail!("Failed to create clipboard context: {}", e);
-            }
-        }
-    }
-    #[allow(unused_mut)]
-    if let Some(mut ctx) = ctx.as_mut() {
-        #[cfg(target_os = "linux")]
-        {
-            use clipboard::platform::unix;
-            if unix::fuse::empty_local_files(_side == ClipboardSide::Client, _conn_id) {
-                ctx.try_empty_clipboard_files(_side);
-            }
-        }
-        #[cfg(target_os = "macos")]
-        {
-            ctx.try_empty_clipboard_files(_side);
-            // No need to make sure the context is enabled.
-            clipboard::ContextSend::proc(|context| -> ResultType<()> {
-                if !context.empty_clipboard(_conn_id)? {
-                    bail!("Failed to empty clipboard files for conn_id {}", _conn_id);
-                }
-                Ok(())
-            })?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-pub fn try_empty_clipboard_files(side: ClipboardSide, conn_id: i32) {
-    log::debug!("try to empty {} cliprdr for conn_id {}", side, conn_id);
-    let _ = clipboard::ContextSend::proc(|context| -> ResultType<()> {
-        context.empty_clipboard(conn_id)?;
-        Ok(())
-    });
 }
 
 #[cfg(target_os = "windows")]
@@ -384,16 +253,7 @@ impl ClipboardContext {
     }
 
     pub fn get(&mut self, side: ClipboardSide, force: bool) -> ResultType<Vec<ClipboardData>> {
-        let data = self.get_formats_filter(SUPPORTED_FORMATS, side, force)?;
-        // We have a separate service named `file-clipboard` to handle file copy-paste.
-        // We need to read the file urls because file copy may set the other clipboard formats such as text.
-        #[cfg(feature = "unix-file-copy-paste")]
-        {
-            if data.iter().any(|c| matches!(c, ClipboardData::FileUrl(_))) {
-                return Ok(vec![]);
-            }
-        }
-        Ok(data)
+        self.get_formats_filter(SUPPORTED_FORMATS, side, force)
     }
 
     fn get_formats_filter(
@@ -419,32 +279,11 @@ impl ClipboardContext {
         Ok(data
             .into_iter()
             .filter(|c| match c {
-                ClipboardData::Special((s, _)) => s != RUSTDESK_CLIPBOARD_OWNER_FORMAT,
-                // Skip synchronizing empty text to the remote clipboard
+                // Skip synchronizing empty text to the remote clipboard.
                 ClipboardData::Text(text) => !text.is_empty(),
-                _ => true,
+                _ => false,
             })
             .collect())
-    }
-
-    #[cfg(feature = "unix-file-copy-paste")]
-    pub fn get_files(
-        &mut self,
-        side: ClipboardSide,
-        force: bool,
-    ) -> ResultType<Option<Vec<String>>> {
-        let data = self.get_formats_filter(
-            &[
-                ClipboardFormat::FileUrl,
-                ClipboardFormat::Special(RUSTDESK_CLIPBOARD_OWNER_FORMAT),
-            ],
-            side,
-            force,
-        )?;
-        Ok(data.into_iter().find_map(|c| match c {
-            ClipboardData::FileUrl(urls) => Some(urls),
-            _ => None,
-        }))
     }
 
     fn set(&mut self, data: &[ClipboardData]) -> ResultType<()> {
@@ -469,74 +308,6 @@ impl ClipboardContext {
             log::warn!("Failed to set PRIMARY clipboard with owner marker: {}", e);
         }
         Ok(())
-    }
-
-    #[cfg(all(feature = "unix-file-copy-paste", target_os = "macos"))]
-    fn get_file_urls_set_by_rustdesk(
-        data: Vec<ClipboardData>,
-        _side: ClipboardSide,
-    ) -> Vec<String> {
-        for item in data.into_iter() {
-            if let ClipboardData::FileUrl(urls) = item {
-                if is_file_url_set_by_rustdesk(&urls) {
-                    return urls;
-                }
-            }
-        }
-        vec![]
-    }
-
-    #[cfg(all(feature = "unix-file-copy-paste", target_os = "linux"))]
-    fn get_file_urls_set_by_rustdesk(data: Vec<ClipboardData>, side: ClipboardSide) -> Vec<String> {
-        let exclude_path =
-            clipboard::platform::unix::fuse::get_exclude_paths(side == ClipboardSide::Client);
-        data.into_iter()
-            .filter_map(|c| match c {
-                ClipboardData::FileUrl(urls) => Some(
-                    urls.into_iter()
-                        .filter(|s| s.starts_with(&*exclude_path))
-                        .collect::<Vec<_>>(),
-                ),
-                _ => None,
-            })
-            .flatten()
-            .collect::<Vec<_>>()
-    }
-
-    #[cfg(feature = "unix-file-copy-paste")]
-    fn try_empty_clipboard_files(&mut self, side: ClipboardSide) {
-        let _lock = ARBOARD_MTX.lock().unwrap();
-        if let Ok(data) = self.get_formats(&[ClipboardFormat::FileUrl]) {
-            let urls = Self::get_file_urls_set_by_rustdesk(data, side);
-            if !urls.is_empty() {
-                // FIXME:
-                // The host-side clear file clipboard `let _ = self.inner.clear();`,
-                // does not work on KDE Plasma for the installed version.
-
-                // Don't use `base::platform::linux::is_kde()` here.
-                // It's not correct in the server process.
-                #[cfg(target_os = "linux")]
-                let is_kde_x11 = base::platform::linux::is_kde_session()
-                    && crate::platform::linux::is_x11();
-                #[cfg(target_os = "macos")]
-                let is_kde_x11 = false;
-                let clear_holder_text = if is_kde_x11 {
-                    "RustDesk placeholder to clear the file clipboard"
-                } else {
-                    ""
-                }
-                .to_string();
-                self.inner
-                    .set_formats(&[
-                        ClipboardData::Text(clear_holder_text),
-                        ClipboardData::Special((
-                            RUSTDESK_CLIPBOARD_OWNER_FORMAT.to_owned(),
-                            side.get_owner_data(),
-                        )),
-                    ])
-                    .ok();
-            }
-        }
     }
 }
 
@@ -637,7 +408,7 @@ mod proto {
     };
     use base::message_proto::{Clipboard, ClipboardFormat, Message, MultiClipboards};
 
-    fn plain_to_proto(s: String, format: ClipboardFormat) -> Clipboard {
+    fn text_to_proto(s: String) -> Clipboard {
         let compressed = compress_func(s.as_bytes());
         let compress = compressed.len() < s.as_bytes().len();
         let content = if compress {
@@ -648,83 +419,17 @@ mod proto {
         Clipboard {
             compress,
             content: content.into(),
-            format: format.into(),
-            ..Default::default()
-        }
-    }
-
-    #[cfg(not(target_os = "android"))]
-    fn image_to_proto(a: arboard::ImageData) -> Clipboard {
-        match &a {
-            arboard::ImageData::Rgba(rgba) => {
-                let compressed = compress_func(&a.bytes());
-                let compress = compressed.len() < a.bytes().len();
-                let content = if compress {
-                    compressed
-                } else {
-                    a.bytes().to_vec()
-                };
-                Clipboard {
-                    compress,
-                    content: content.into(),
-                    width: rgba.width as _,
-                    height: rgba.height as _,
-                    format: ClipboardFormat::ImageRgba.into(),
-                    ..Default::default()
-                }
-            }
-            arboard::ImageData::Png(png) => Clipboard {
-                compress: false,
-                content: png.to_owned().to_vec().into(),
-                format: ClipboardFormat::ImagePng.into(),
-                ..Default::default()
-            },
-            arboard::ImageData::Svg(_) => {
-                let compressed = compress_func(&a.bytes());
-                let compress = compressed.len() < a.bytes().len();
-                let content = if compress {
-                    compressed
-                } else {
-                    a.bytes().to_vec()
-                };
-                Clipboard {
-                    compress,
-                    content: content.into(),
-                    format: ClipboardFormat::ImageSvg.into(),
-                    ..Default::default()
-                }
-            }
-        }
-    }
-
-    fn special_to_proto(d: Vec<u8>, s: String) -> Clipboard {
-        let compressed = compress_func(&d);
-        let compress = compressed.len() < d.len();
-        let content = if compress {
-            compressed
-        } else {
-            d
-        };
-        Clipboard {
-            compress,
-            content: content.into(),
-            format: ClipboardFormat::Special.into(),
-            special_name: s,
+            format: ClipboardFormat::Text.into(),
             ..Default::default()
         }
     }
 
     #[cfg(not(target_os = "android"))]
     fn clipboard_data_to_proto(data: ClipboardData) -> Option<Clipboard> {
-        let d = match data {
-            ClipboardData::Text(s) => plain_to_proto(s, ClipboardFormat::Text),
-            ClipboardData::Rtf(s) => plain_to_proto(s, ClipboardFormat::Rtf),
-            ClipboardData::Html(s) => plain_to_proto(s, ClipboardFormat::Html),
-            ClipboardData::Image(a) => image_to_proto(a),
-            ClipboardData::Special((s, d)) => special_to_proto(d, s),
-            _ => return None,
-        };
-        Some(d)
+        match data {
+            ClipboardData::Text(s) => Some(text_to_proto(s)),
+            _ => None,
+        }
     }
 
     #[cfg(not(target_os = "android"))]
@@ -740,35 +445,15 @@ mod proto {
 
     #[cfg(not(target_os = "android"))]
     fn from_clipboard(clipboard: Clipboard) -> Option<ClipboardData> {
+        if clipboard.format.enum_value() != Ok(ClipboardFormat::Text) {
+            return None;
+        }
         let data = if clipboard.compress {
             decompress(&clipboard.content)
         } else {
             clipboard.content.into()
         };
-        match clipboard.format.enum_value() {
-            Ok(ClipboardFormat::Text) => String::from_utf8(data).ok().map(ClipboardData::Text),
-            Ok(ClipboardFormat::Rtf) => String::from_utf8(data).ok().map(ClipboardData::Rtf),
-            Ok(ClipboardFormat::Html) => String::from_utf8(data).ok().map(ClipboardData::Html),
-            Ok(ClipboardFormat::ImageRgba) => {
-                let (width, height) =
-                    super::valid_rgba_dimensions(clipboard.width, clipboard.height, data.len())?;
-                Some(ClipboardData::Image(arboard::ImageData::rgba(
-                    width,
-                    height,
-                    data.into(),
-                )))
-            }
-            Ok(ClipboardFormat::ImagePng) => {
-                Some(ClipboardData::Image(arboard::ImageData::png(data.into())))
-            }
-            Ok(ClipboardFormat::ImageSvg) => Some(ClipboardData::Image(arboard::ImageData::svg(
-                std::str::from_utf8(&data).unwrap_or_default(),
-            ))),
-            Ok(ClipboardFormat::Special) => {
-                Some(ClipboardData::Special((clipboard.special_name, data)))
-            }
-            _ => None,
-        }
+        String::from_utf8(data).ok().map(ClipboardData::Text)
     }
 
     #[cfg(not(target_os = "android"))]
@@ -802,41 +487,59 @@ mod proto {
 
     #[cfg(all(test, not(target_os = "android")))]
     mod tests {
-        use super::{from_clipboard, special_to_proto};
+        use super::{create_multi_clipboards, from_clipboard, from_multi_clipboards, text_to_proto};
         use arboard::ClipboardData;
+        use base::message_proto::{Clipboard, ClipboardFormat};
 
         #[test]
-        fn preserves_uncompressed_special_clipboard_data() {
-            let data = vec![0x01, 0x02, 0x03];
-            let name = "custom-format".to_owned();
-
-            let clipboard = special_to_proto(data.clone(), name.clone());
-
-            assert!(!clipboard.compress);
-            assert_eq!(clipboard.content.as_ref(), data.as_slice());
-            assert_eq!(clipboard.special_name, name);
-            assert!(matches!(
-                from_clipboard(clipboard),
-                Some(ClipboardData::Special((restored_name, restored_data)))
-                    if restored_name == name && restored_data == data
-            ));
+        fn text_round_trips_with_and_without_compression() {
+            for text in ["Hi".to_owned(), "文字 clipboard ".repeat(100)] {
+                let clipboard = text_to_proto(text.clone());
+                assert_eq!(clipboard.compress, text.len() > 100);
+                assert!(matches!(
+                    from_clipboard(clipboard),
+                    Some(ClipboardData::Text(restored)) if restored == text
+                ));
+            }
         }
-    }
-}
 
-#[cfg(all(test, not(target_os = "android")))]
-mod rgba_tests {
-    use super::valid_rgba_dimensions;
+        #[test]
+        fn sends_only_text_and_keeps_owner_marker_local() {
+            let clipboards = create_multi_clipboards(vec![
+                ClipboardData::Text("text".to_owned()),
+                ClipboardData::Html("<p>html</p>".to_owned()),
+                ClipboardData::Special((
+                    super::super::RUSTDESK_CLIPBOARD_OWNER_FORMAT.to_owned(),
+                    vec![1],
+                )),
+            ]);
+            assert_eq!(clipboards.clipboards.len(), 1);
+            assert_eq!(
+                clipboards.clipboards[0].format.enum_value(),
+                Ok(ClipboardFormat::Text)
+            );
+        }
 
-    #[test]
-    fn validates_dimensions_against_content_length() {
-        assert_eq!(valid_rgba_dimensions(1, 1, 4), Some((1, 1)));
-        assert_eq!(valid_rgba_dimensions(1, 1, 3), None);
-        assert_eq!(valid_rgba_dimensions(-1, 1, 4), None);
-        assert_eq!(valid_rgba_dimensions(0, 1, 0), None);
-        assert_eq!(valid_rgba_dimensions(i32::MAX, i32::MAX, 4), None);
-        #[cfg(target_pointer_width = "32")]
-        assert_eq!(valid_rgba_dimensions(i32::MAX, 2, 0), None);
+        #[test]
+        fn ignores_non_text_and_invalid_utf8_from_peer() {
+            let mut clipboards = vec![text_to_proto("text".to_owned())];
+            // Retired rich-text, image, and custom formats retain their wire numbers.
+            for format in [1, 2, 21, 22, 23, 31, i32::MAX] {
+                clipboards.push(Clipboard {
+                    format: hbb_common::protobuf::EnumOrUnknown::from_i32(format),
+                    content: b"ignored".to_vec().into(),
+                    ..Default::default()
+                });
+            }
+            clipboards.push(Clipboard {
+                format: ClipboardFormat::Text.into(),
+                content: vec![0xff].into(),
+                ..Default::default()
+            });
+            let restored = from_multi_clipboards(clipboards);
+            assert_eq!(restored.len(), 1);
+            assert!(matches!(&restored[0], ClipboardData::Text(text) if text == "text"));
+        }
     }
 }
 
@@ -844,6 +547,9 @@ mod rgba_tests {
 pub fn handle_msg_clipboard(mut cb: Clipboard) {
     use hbb_common::protobuf::Message;
 
+    if cb.format.enum_value() != Ok(ClipboardFormat::Text) {
+        return;
+    }
     if cb.compress {
         cb.content = bytes::Bytes::from(hbb_common::compress::decompress(&cb.content));
     }
@@ -860,6 +566,11 @@ pub fn handle_msg_clipboard(mut cb: Clipboard) {
 pub fn handle_msg_multi_clipboards(mut mcb: MultiClipboards) {
     use hbb_common::protobuf::Message;
 
+    mcb.clipboards
+        .retain(|cb| cb.format.enum_value() == Ok(ClipboardFormat::Text));
+    if mcb.clipboards.is_empty() {
+        return;
+    }
     for cb in mcb.clipboards.iter_mut() {
         if cb.compress {
             cb.content = bytes::Bytes::from(hbb_common::compress::decompress(&cb.content));
@@ -873,6 +584,12 @@ pub fn handle_msg_multi_clipboards(mut mcb: MultiClipboards) {
 #[cfg(target_os = "android")]
 pub fn get_clipboards_msg(client: bool) -> Option<Message> {
     let mut clipboards = scrap::android::ffi::get_clipboards(client)?;
+    clipboards
+        .clipboards
+        .retain(|cb| cb.format.enum_value() == Ok(ClipboardFormat::Text));
+    if clipboards.clipboards.is_empty() {
+        return None;
+    }
     let mut msg = Message::new();
     for c in &mut clipboards.clipboards {
         let compressed = hbb_common::compress::compress(&c.content);
@@ -912,8 +629,6 @@ pub mod clipboard_listener {
 
     pub enum ClipboardEvent {
         Changed,
-        #[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-        InitialSelection,
         Stop,
         StopWithError(io::Error),
     }
@@ -979,13 +694,7 @@ pub mod clipboard_listener {
         }
 
         fn on_clipboard_initial_selection(&mut self) -> CallbackResult {
-            // Only client file sync consumes this event; text initial sync is per session.
-            #[cfg(all(target_os = "linux", feature = "unix-file-copy-paste"))]
-            for tx in self.subscribers.lock().unwrap().values() {
-                if let Err(err) = tx.send(ClipboardEvent::InitialSelection) {
-                    log::debug!("Failed to notify initial clipboard selection: {}", err);
-                }
-            }
+            // Text initial synchronization is per session, not a host clipboard change.
             CallbackResult::Next
         }
 

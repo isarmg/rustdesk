@@ -28,15 +28,10 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
 
-import '../consts.dart';
+import 'consts.dart';
 import 'common/widgets/overlay.dart';
-import 'mobile/pages/file_manager_page.dart';
 import 'mobile/pages/remote_page.dart';
-import 'mobile/pages/view_camera_page.dart';
-import 'mobile/pages/terminal_page.dart';
 import 'desktop/pages/remote_page.dart' as desktop_remote;
-import 'desktop/pages/file_manager_page.dart' as desktop_file_manager;
-import 'desktop/pages/view_camera_page.dart' as desktop_view_camera;
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'models/model.dart';
 import 'models/platform_model.dart';
@@ -45,7 +40,6 @@ import 'package:flutter_hbb/native/win32.dart'
     if (dart.library.html) 'package:flutter_hbb/web/win32.dart';
 import 'package:flutter_hbb/native/common.dart'
     if (dart.library.html) 'package:flutter_hbb/web/common.dart';
-import 'package:flutter_hbb/utils/http_service.dart' as http;
 
 final globalKey = GlobalKey<NavigatorState>();
 final navigationBarKey = GlobalKey();
@@ -103,11 +97,7 @@ final iconHardDrive = MemoryImage(Uint8List.fromList(base64Decode(
 enum DesktopType {
   main,
   remote,
-  fileTransfer,
-  viewCamera,
-  terminal,
   cm,
-  portForward,
 }
 
 bool isDoubleEqual(double a, double b) {
@@ -117,8 +107,6 @@ bool isDoubleEqual(double a, double b) {
 class IconFont {
   static const _family1 = 'Tabbar';
   static const _family2 = 'PeerSearchbar';
-  static const _family3 = 'AddressBook';
-  static const _family4 = 'DeviceGroup';
   static const _family5 = 'More';
 
   IconFont._();
@@ -131,11 +119,6 @@ class IconFont {
   static const IconData menu = IconData(0xe628, fontFamily: _family1);
   static const IconData search = IconData(0xe6a4, fontFamily: _family2);
   static const IconData roundClose = IconData(0xe6ed, fontFamily: _family2);
-  static const IconData addressBook = IconData(0xe602, fontFamily: _family3);
-  static const IconData deviceGroupOutline =
-      IconData(0xe623, fontFamily: _family4);
-  static const IconData deviceGroupFill =
-      IconData(0xe748, fontFamily: _family4);
   static const IconData more = IconData(0xe609, fontFamily: _family5);
 }
 
@@ -704,7 +687,6 @@ closeConnection({String? id}) {
     () async {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
           overlays: SystemUiOverlay.values);
-      gFFI.chatModel.hideChatOverlay();
       Navigator.popUntil(globalKey.currentContext!, ModalRoute.withName("/"));
       stateGlobal.isInMainPage = true;
     }();
@@ -714,17 +696,6 @@ closeConnection({String? id}) {
       stateGlobal.isInMainPage = true;
     } else {
       final controller = Get.find<DesktopTabController>();
-      if (controller.tabType == DesktopTabType.terminal &&
-          controller.onCloseWindow != null) {
-        // Terminal windows are scoped to one peer. The optional id passed to
-        // closeConnection() is that peer id, not a terminal tab key
-        // (${peerId}_${terminalId}). Closing from terminal dialogs should close
-        // the peer's whole terminal window, including all terminal tabs.
-        unawaited(controller.onCloseWindow!().catchError((e, _) {
-          debugPrint('[closeConnection] Failed to close terminal window: $e');
-        }));
-        return;
-      }
       controller.closeBy(id);
     }
   }
@@ -1233,7 +1204,7 @@ void msgBox(SessionID sessionId, String type, String title, String text,
       onSubmit.call();
     } else {
       // https://github.com/rustdesk/rustdesk/blob/5e9a31340b899822090a3731769ae79c6bf5f3e5/src/ui/common.tis#L263
-      if (!type.contains("custom") && desktopType != DesktopType.portForward) {
+      if (!type.contains("custom")) {
         closeConnection();
       }
     }
@@ -1692,10 +1663,6 @@ Future<bool> matchPeer(
   if (peer.alias.toLowerCase().contains(searchText)) {
     return true;
   }
-  if (peerTabShowNote(peerTabIndex) &&
-      peer.note.toLowerCase().contains(searchText)) {
-    return true;
-  }
   return false;
 }
 
@@ -1887,8 +1854,7 @@ Future<void> _saveWindowPositionActual(WindowKey key) async {
     await bind.setLocalFlutterOption(
         k: windowFramePrefix + key.type.name, v: pos.toString());
 
-    if ((key.type == WindowType.RemoteDesktop ||
-            key.type == WindowType.ViewCamera) &&
+    if ((key.type == WindowType.RemoteDesktop) &&
         key.windowId != null) {
       await _saveSessionWindowPosition(key.type, key.windowId!,
           pos.isMaximized ?? false, pos.isFullscreen ?? false, pos);
@@ -2040,7 +2006,7 @@ Future<bool> restoreWindowPosition(WindowType type,
   String? pos;
   // No need to check mainGetLocalBoolOptionSync(kOptionOpenNewConnInTabs)
   // Though "open in tabs" is true and the new window restore peer position, it's ok.
-  if ((type == WindowType.RemoteDesktop || type == WindowType.ViewCamera) &&
+  if ((type == WindowType.RemoteDesktop) &&
       windowId != null &&
       peerId != null) {
     final peerPos = bind.mainGetPeerFlutterOptionSync(
@@ -2073,7 +2039,7 @@ Future<bool> restoreWindowPosition(WindowType type,
     }
     return true;
   }
-  if (type == WindowType.RemoteDesktop || type == WindowType.ViewCamera) {
+  if (type == WindowType.RemoteDesktop) {
     if (!isRemotePeerPos && windowId != null) {
       if (lpos.offsetWidth != null) {
         lpos.offsetWidth = lpos.offsetWidth! + windowId * kNewWindowOffset;
@@ -2241,15 +2207,6 @@ StreamSubscription? listenUniLinks({handleByFlutter = true}) {
 
 enum UriLinkType {
   remoteDesktop,
-  fileTransfer,
-  viewCamera,
-  portForward,
-  rdp,
-  terminal,
-}
-
-setEnvTerminalAdmin() {
-  bind.mainSetEnv(key: 'IS_TERMINAL_ADMIN', value: 'Y');
 }
 
 // uri link handler
@@ -2294,37 +2251,7 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
         id = args[i + 1];
         i++;
         break;
-      case '--file-transfer':
-        type = UriLinkType.fileTransfer;
-        id = args[i + 1];
-        i++;
-        break;
-      case '--view-camera':
-        type = UriLinkType.viewCamera;
-        id = args[i + 1];
-        i++;
-        break;
-      case '--port-forward':
-        type = UriLinkType.portForward;
-        id = args[i + 1];
-        i++;
-        break;
-      case '--rdp':
-        type = UriLinkType.rdp;
-        id = args[i + 1];
-        i++;
-        break;
-      case '--terminal':
-        type = UriLinkType.terminal;
-        id = args[i + 1];
-        i++;
-        break;
-      case '--terminal-admin':
-        setEnvTerminalAdmin();
-        type = UriLinkType.terminal;
-        id = args[i + 1];
-        i++;
-        break;
+
       case '--password':
         password = args[i + 1];
         i++;
@@ -2350,36 +2277,7 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
               forceRelay: forceRelay);
         });
         break;
-      case UriLinkType.fileTransfer:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newFileTransfer(id!,
-              password: password, forceRelay: forceRelay);
-        });
-        break;
-      case UriLinkType.viewCamera:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newViewCamera(id!,
-              password: password, forceRelay: forceRelay);
-        });
-        break;
-      case UriLinkType.portForward:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newPortForward(id!, false,
-              password: password, forceRelay: forceRelay);
-        });
-        break;
-      case UriLinkType.rdp:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newPortForward(id!, true,
-              password: password, forceRelay: forceRelay);
-        });
-        break;
-      case UriLinkType.terminal:
-        Future.delayed(Duration.zero, () {
-          rustDeskWinManager.newTerminal(id!,
-              password: password, forceRelay: forceRelay);
-        });
-        break;
+
     }
 
     return true;
@@ -2394,12 +2292,6 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
   final options = [
     "connect",
     "play",
-    "file-transfer",
-    "view-camera",
-    "port-forward",
-    "rdp",
-    "terminal",
-    "terminal-admin",
   ];
   if (uri.authority.isEmpty &&
       uri.path.split('').every((char) => char == '/')) {
@@ -2485,24 +2377,7 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     final forceRelay = queryParameters["relay"] != null;
     final password = queryParameters["password"];
 
-    // Determine connection type based on command
-    if (command == '--file-transfer') {
-      connect(Get.context!, id,
-          isFileTransfer: true, forceRelay: forceRelay, password: password);
-    } else if (command == '--view-camera') {
-      connect(Get.context!, id,
-          isViewCamera: true, forceRelay: forceRelay, password: password);
-    } else if (command == '--terminal') {
-      connect(Get.context!, id,
-          isTerminal: true, forceRelay: forceRelay, password: password);
-    } else if (command == 'terminal-admin') {
-      setEnvTerminalAdmin();
-      connect(Get.context!, id,
-          isTerminal: true, forceRelay: forceRelay, password: password);
-    } else {
-      // Default to remote desktop for '--connect', '--play', or direct connection
-      connect(Get.context!, id, forceRelay: forceRelay, password: password);
-    }
+    connect(Get.context!, id, forceRelay: forceRelay, password: password);
     return null;
   }
 
@@ -2523,59 +2398,19 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
 }
 
 connectMainDesktop(String id,
-    {required bool isFileTransfer,
-    required bool isViewCamera,
-    required bool isTerminal,
-    required bool isTcpTunneling,
-    required bool isRDP,
-    bool? forceRelay,
+    {bool? forceRelay,
     String? password,
     String? connToken,
     bool? isSharedPassword}) async {
-  if (isFileTransfer) {
-    await rustDeskWinManager.newFileTransfer(id,
-        password: password,
-        isSharedPassword: isSharedPassword,
-        connToken: connToken,
-        forceRelay: forceRelay);
-  } else if (isViewCamera) {
-    await rustDeskWinManager.newViewCamera(id,
-        password: password,
-        isSharedPassword: isSharedPassword,
-        connToken: connToken,
-        forceRelay: forceRelay);
-  } else if (isTcpTunneling || isRDP) {
-    await rustDeskWinManager.newPortForward(id, isRDP,
-        password: password,
-        isSharedPassword: isSharedPassword,
-        connToken: connToken,
-        forceRelay: forceRelay);
-  } else if (isTerminal) {
-    await rustDeskWinManager.newTerminal(id,
-        password: password,
-        isSharedPassword: isSharedPassword,
-        connToken: connToken,
-        forceRelay: forceRelay);
-  } else {
-    await rustDeskWinManager.newRemoteDesktop(id,
-        password: password,
-        isSharedPassword: isSharedPassword,
-        forceRelay: forceRelay);
-  }
+  await rustDeskWinManager.newRemoteDesktop(id,
+      password: password,
+      isSharedPassword: isSharedPassword,
+      forceRelay: forceRelay);
 }
 
 /// Connect to a peer with [id].
-/// If [isFileTransfer], starts a session only for file transfer.
-/// If [isViewCamera], starts a session only for view camera.
-/// If [isTcpTunneling], starts a session only for tcp tunneling.
-/// If [isRDP], starts a session only for rdp.
 connect(BuildContext context, String id,
-    {bool isFileTransfer = false,
-    bool isViewCamera = false,
-    bool isTerminal = false,
-    bool isTcpTunneling = false,
-    bool isRDP = false,
-    bool forceRelay = false,
+    {bool forceRelay = false,
     String? password,
     String? connToken,
     bool? isSharedPassword}) async {
@@ -2596,18 +2431,11 @@ connect(BuildContext context, String id,
   final oldId = id;
   id = await bind.mainHandleRelayId(id: id);
   forceRelay = id != oldId || forceRelay;
-  assert(!(isFileTransfer && isTcpTunneling && isRDP),
-      "more than one connect type");
 
   if (isDesktop) {
     if (desktopType == DesktopType.main) {
       await connectMainDesktop(
         id,
-        isFileTransfer: isFileTransfer,
-        isViewCamera: isViewCamera,
-        isTerminal: isTerminal,
-        isTcpTunneling: isTcpTunneling,
-        isRDP: isRDP,
         password: password,
         isSharedPassword: isSharedPassword,
         forceRelay: forceRelay,
@@ -2615,11 +2443,6 @@ connect(BuildContext context, String id,
     } else {
       await rustDeskWinManager.call(WindowType.Main, kWindowConnect, {
         'id': id,
-        'isFileTransfer': isFileTransfer,
-        'isViewCamera': isViewCamera,
-        'isTerminal': isTerminal,
-        'isTcpTunneling': isTcpTunneling,
-        'isRDP': isRDP,
         'password': password,
         'isSharedPassword': isSharedPassword,
         'forceRelay': forceRelay,
@@ -2627,70 +2450,6 @@ connect(BuildContext context, String id,
       });
     }
   } else {
-    if (isFileTransfer) {
-      if (isWeb) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (BuildContext context) =>
-                desktop_file_manager.FileManagerPage(
-                    id: id,
-                    password: password,
-                    isSharedPassword: isSharedPassword),
-          ),
-        );
-      } else {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (BuildContext context) => FileManagerPage(
-                id: id,
-                password: password,
-                isSharedPassword: isSharedPassword,
-                forceRelay: forceRelay),
-          ),
-        );
-      }
-    } else if (isViewCamera) {
-      if (isWeb) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (BuildContext context) =>
-                desktop_view_camera.ViewCameraPage(
-              key: ValueKey(id),
-              id: id,
-              toolbarState: ToolbarState(),
-              password: password,
-              isSharedPassword: isSharedPassword,
-            ),
-          ),
-        );
-      } else {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (BuildContext context) => ViewCameraPage(
-                id: id,
-                password: password,
-                isSharedPassword: isSharedPassword,
-                forceRelay: forceRelay),
-          ),
-        );
-      }
-    } else if (isTerminal) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (BuildContext context) => TerminalPage(
-            id: id,
-            password: password,
-            isSharedPassword: isSharedPassword,
-            forceRelay: forceRelay,
-          ),
-        ),
-      );
-    } else {
       if (isWeb) {
         Navigator.push(
           context,
@@ -2716,7 +2475,6 @@ connect(BuildContext context, String id,
           ),
         );
       }
-    }
     stateGlobal.isInMainPage = false;
   }
 
@@ -2726,11 +2484,7 @@ connect(BuildContext context, String id,
   }
 }
 
-Map<String, String> getHttpHeaders() {
-  return {
-    'Authorization': 'Bearer ${bind.mainGetLocalOption(key: 'access_token')}'
-  };
-}
+
 
 // Simple wrapper of built-in types for reference use.
 class SimpleWrapper<T> {
@@ -3025,12 +2779,7 @@ String getWindowName({WindowType? overrideType}) {
   switch (overrideType ?? kWindowType) {
     case WindowType.Main:
       return name;
-    case WindowType.FileTransfer:
-      return "File Transfer - $name";
-    case WindowType.ViewCamera:
-      return "View Camera - $name";
-    case WindowType.PortForward:
-      return "Port Forward - $name";
+
     case WindowType.RemoteDesktop:
       return "Remote Desktop - $name";
     default:
@@ -3625,7 +3374,6 @@ Future<bool> setServerConfig(
       return false;
     }
   }
-  final oldApiServer = await bind.mainGetApiServer();
 
   // should set one by one
   await bind.mainSetOption(
@@ -3633,12 +3381,6 @@ Future<bool> setServerConfig(
   await bind.mainSetOption(key: 'relay-server', value: config.relayServer);
   await bind.mainSetOption(key: 'api-server', value: config.apiServer);
   await bind.mainSetOption(key: 'key', value: config.key);
-  final newApiServer = await bind.mainGetApiServer();
-  if (oldApiServer.isNotEmpty &&
-      oldApiServer != newApiServer &&
-      gFFI.userModel.isLogin) {
-    gFFI.userModel.logOut(apiServer: oldApiServer);
-  }
   return true;
 }
 
@@ -4027,24 +3769,6 @@ disableWindowMovable(int? windowId) {
   }
 }
 
-Widget netWorkErrorWidget() {
-  return Center(
-      child: Column(
-    mainAxisAlignment: MainAxisAlignment.center,
-    crossAxisAlignment: CrossAxisAlignment.center,
-    children: [
-      if (!gFFI.userModel.networkErrorFromServer.value)
-        Text(translate("network_error_tip")),
-      ElevatedButton(
-              onPressed: gFFI.userModel.refreshCurrentUser,
-              child: Text(translate("Retry")))
-          .marginSymmetric(vertical: 16),
-      SelectableText(gFFI.userModel.networkError.value,
-          style: TextStyle(fontSize: 11, color: Colors.red)),
-    ],
-  ));
-}
-
 List<ResizeEdge>? get windowManagerEnableResizeEdges => isWindows
     ? [
         ResizeEdge.topLeft,
@@ -4166,24 +3890,6 @@ void updateTextAndPreserveSelection(
   }
 }
 
-List<String> getPrinterNames() {
-  final printerNamesJson = bind.mainGetPrinterNames();
-  if (printerNamesJson.isEmpty) {
-    return [];
-  }
-  try {
-    final List<dynamic> printerNamesList = jsonDecode(printerNamesJson);
-    final appPrinterName = '$appName Printer';
-    return printerNamesList
-        .map((e) => e.toString())
-        .where((name) => name != appPrinterName)
-        .toList();
-  } catch (e) {
-    debugPrint('failed to parse printer names, err: $e');
-    return [];
-  }
-}
-
 String _appName = '';
 String get appName {
   if (_appName.isEmpty) {
@@ -4213,16 +3919,7 @@ String getConnectionText(bool secure, bool direct, String streamType) {
   }
 }
 
-String decode_http_response(http.Response resp) {
-  try {
-    // https://github.com/rustdesk/rustdesk-server-pro/discussions/758
-    return utf8.decode(resp.bodyBytes, allowMalformed: true);
-  } catch (e) {
-    debugPrint('Failed to decode response as UTF-8: $e');
-    // Fallback to bodyString which handles encoding automatically
-    return resp.body;
-  }
-}
+
 
 bool peerTabShowNote(PeerTabIndex peerTabIndex) {
   return peerTabIndex == PeerTabIndex.ab || peerTabIndex == PeerTabIndex.group;

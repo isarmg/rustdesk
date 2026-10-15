@@ -37,14 +37,7 @@ dependencies:
   url_launcher: ^6.3.1
   url_launcher_ios: ^6.3.2
   toggle_switch: ^2.1.0
-  dash_chat_2:
-    git:
-      url: https://github.com/rustdesk-org/Dash-Chat-2
-      ref: bd6b5b41254e57c5bcece202ebfb234de63e6487
-  draggable_float_widget: ^0.1.0
   settings_ui: ^2.0.2
-  flutter_breadcrumb: ^1.0.1
-  http: ^1.1.0
   qr_code_scanner: ^1.0.0
   zxing2: ^0.2.0
   image_picker: ^1.1.2
@@ -71,8 +64,6 @@ dependencies:
       ref: 51e67ce047c72b26810b99e8473ddb44612fe356
   get: ^4.6.5
   visibility_detector: ^0.4.0+2
-  contextmenu: ^3.0.0
-  desktop_drop: ^0.4.4
   scroll_pos: ^0.4.0
   debounce_throttle: ^2.0.0
   file_picker: ^5.1.0
@@ -94,7 +85,6 @@ dependencies:
     git:
       url: https://github.com/rustdesk-org/flutter_texture_rgba_renderer
       ref: 42797e0f03141dc2b585f76c64a13974508058b4
-  percent_indicator: ^4.2.2
   dropdown_button2: ^2.0.0
   flutter_gpu_texture_renderer:
     git:
@@ -102,7 +92,6 @@ dependencies:
       ref: 08a471bb8ceccdd50483c81cdfa8b81b07b14b87
   uuid: ^3.0.7
   auto_size_text_field: ^2.2.1
-  flex_color_picker: ^3.3.0
   dynamic_layouts:
     git:
       url: https://github.com/rustdesk-org/dynamic_layouts.git
@@ -110,10 +99,6 @@ dependencies:
   pull_down_button: ^0.9.3
   device_info_plus: ^9.1.0
   qr_flutter: ^4.1.0
-  extended_text: 14.0.0
-  xterm: 4.0.0
-  sqflite: 2.2.0
-  google_fonts: ^6.2.1
   vector_math: ^2.1.4
 
 dev_dependencies:
@@ -168,12 +153,6 @@ flutter:
     - family: PeerSearchbar
       fonts:
         - asset: assets/peer_searchbar.ttf
-    - family: AddressBook
-      fonts:
-        - asset: assets/address_book.ttf
-    - family: DeviceGroup
-      fonts:
-        - asset: assets/device_group.ttf
     - family: More
       fonts:
         - asset: assets/more.ttf

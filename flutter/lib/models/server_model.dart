@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/main.dart';
 import 'package:flutter_hbb/mobile/pages/settings_page.dart';
-import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:get/get.dart';
 import 'package:window_manager/window_manager.dart';
@@ -28,7 +27,6 @@ class ServerModel with ChangeNotifier {
   bool _mediaOk = false;
   bool _inputOk = false;
   bool _audioOk = false;
-  bool _fileOk = false;
   bool _clipboardOk = false;
   bool _showElevation = false;
   bool hideCm = false;
@@ -60,7 +58,6 @@ class ServerModel with ChangeNotifier {
 
   bool get audioOk => _audioOk;
 
-  bool get fileOk => _fileOk;
 
   bool get clipboardOk => _clipboardOk;
 
@@ -210,11 +207,6 @@ class ServerModel with ChangeNotifier {
       _audioOk = audioOption != 'N';
     }
 
-    // Android file transfer is confined to app-specific storage. Files enter
-    // and leave the workspace through Android's system document picker.
-    final fileOption = await bind.mainGetOption(key: kOptionEnableFileTransfer);
-    _fileOk = fileOption != 'N';
-
     // clipboard
     final clipOption = await bind.mainGetOption(key: kOptionEnableClipboard);
     _clipboardOk = clipOption != 'N';
@@ -307,17 +299,6 @@ class ServerModel with ChangeNotifier {
     _audioOk = !_audioOk;
     bind.mainSetOption(
         key: kOptionEnableAudio, value: _audioOk ? defaultOptionYes : 'N');
-    notifyListeners();
-  }
-
-  toggleFile() async {
-    if (clients.any((c) => !c.disconnected)) {
-      await showClientsMayNotBeChangedAlert(parent.target);
-    }
-    _fileOk = !_fileOk;
-    bind.mainSetOption(
-        key: kOptionEnableFileTransfer,
-        value: _fileOk ? defaultOptionYes : 'N');
     notifyListeners();
   }
 
@@ -585,40 +566,16 @@ class ServerModel with ChangeNotifier {
         cmHiddenTimer = null;
       });
     }
-    parent.target?.chatModel
-        .updateConnIdOfKey(MessageKey(client.peerId, client.id));
   }
 
   void showLoginDialog(Client client) {
     showClientDialog(
       client,
-      client.isFileTransfer
-          ? "Transfer file"
-          : client.isViewCamera
-              ? "View camera"
-              : client.isTerminal
-                  ? "Terminal"
-                  : "Share screen",
+      "Share screen",
       'Do you accept?',
       'android_new_connection_tip',
       () => sendLoginResponse(client, false),
       () => sendLoginResponse(client, true),
-    );
-  }
-
-  handleVoiceCall(Client client, bool accept) {
-    parent.target?.invokeMethod("cancel_notification", client.id);
-    bind.cmHandleIncomingVoiceCall(id: client.id, accept: accept);
-  }
-
-  showVoiceCallDialog(Client client) {
-    showClientDialog(
-      client,
-      'Voice call',
-      'Do you accept?',
-      'android_new_voice_call_tip',
-      () => handleVoiceCall(client, false),
-      () => handleVoiceCall(client, true),
     );
   }
 
@@ -677,9 +634,7 @@ class ServerModel with ChangeNotifier {
   void sendLoginResponse(Client client, bool res) async {
     if (res) {
       bind.cmLoginRes(connId: client.id, res: res);
-      if (!client.isFileTransfer && !client.isTerminal) {
-        parent.target?.invokeMethod("start_capture");
-      }
+      parent.target?.invokeMethod("start_capture");
       parent.target?.invokeMethod("cancel_notification", client.id);
       client.authorized = true;
       notifyListeners();
@@ -744,30 +699,6 @@ class ServerModel with ChangeNotifier {
     }
   }
 
-  void updateVoiceCallState(Map<String, dynamic> evt) {
-    try {
-      final client = Client.fromJson(jsonDecode(evt["client"]));
-      final index = _clients.indexWhere((element) => element.id == client.id);
-      if (index != -1) {
-        _clients[index].inVoiceCall = client.inVoiceCall;
-        _clients[index].incomingVoiceCall = client.incomingVoiceCall;
-        if (client.incomingVoiceCall) {
-          if (isAndroid) {
-            showVoiceCallDialog(client);
-          } else {
-            // Has incoming phone call, let's set the window on top.
-            Future.delayed(Duration.zero, () {
-              windowOnTop(null);
-            });
-          }
-        }
-        notifyListeners();
-      }
-    } catch (e) {
-      debugPrint("updateVoiceCallState failed: $e");
-    }
-  }
-
   void androidUpdatekeepScreenOn() async {
     if (!isAndroid) return;
     var floatingWindowDisabled =
@@ -788,105 +719,63 @@ class ServerModel with ChangeNotifier {
   }
 }
 
-enum ClientType {
-  remote,
-  file,
-  camera,
-  portForward,
-  terminal,
-}
+enum ClientType { remote }
 
 class Client {
   int id = 0; // client connections inner count id
   bool authorized = false;
-  bool isFileTransfer = false;
-  bool isViewCamera = false;
-  bool isTerminal = false;
-  String portForward = "";
   String name = "";
   String avatar = "";
   String peerId = ""; // peer user's id,show at app
   bool keyboard = false;
   bool clipboard = false;
   bool audio = false;
-  bool file = false;
   bool restart = false;
-  bool recording = false;
   bool blockInput = false;
   bool privacyMode = false;
   bool disconnected = false;
   bool fromSwitch = false;
-  bool inVoiceCall = false;
-  bool incomingVoiceCall = false;
 
-  RxInt unreadChatMessageCount = 0.obs;
 
-  Client(this.id, this.authorized, this.isFileTransfer, this.isViewCamera,
+  Client(this.id, this.authorized,
       this.name, this.peerId, this.keyboard, this.clipboard, this.audio);
 
   Client.fromJson(Map<String, dynamic> json) {
     id = json['id'];
     authorized = json['authorized'];
-    isFileTransfer = json['is_file_transfer'];
-    // TODO: no entry then default.
-    isViewCamera = json['is_view_camera'];
-    isTerminal = json['is_terminal'] ?? false;
-    portForward = json['port_forward'];
     name = json['name'];
     avatar = json['avatar'] ?? '';
     peerId = json['peer_id'];
     keyboard = json['keyboard'];
     clipboard = json['clipboard'];
     audio = json['audio'];
-    file = json['file'];
     restart = json['restart'];
-    recording = json['recording'];
     blockInput = json['block_input'];
     privacyMode = json['privacy_mode'] ?? privacyMode;
     disconnected = json['disconnected'];
     fromSwitch = json['from_switch'];
-    inVoiceCall = json['in_voice_call'];
-    incomingVoiceCall = json['incoming_voice_call'];
   }
 
   Map<String, dynamic> toJson() {
     final Map<String, dynamic> data = <String, dynamic>{};
     data['id'] = id;
     data['authorized'] = authorized;
-    data['is_file_transfer'] = isFileTransfer;
-    data['is_view_camera'] = isViewCamera;
-    data['is_terminal'] = isTerminal;
-    data['port_forward'] = portForward;
     data['name'] = name;
     data['avatar'] = avatar;
     data['peer_id'] = peerId;
     data['keyboard'] = keyboard;
     data['clipboard'] = clipboard;
     data['audio'] = audio;
-    data['file'] = file;
     data['restart'] = restart;
-    data['recording'] = recording;
     data['block_input'] = blockInput;
     data['privacy_mode'] = privacyMode;
     data['disconnected'] = disconnected;
     data['from_switch'] = fromSwitch;
-    data['in_voice_call'] = inVoiceCall;
-    data['incoming_voice_call'] = incomingVoiceCall;
     return data;
   }
 
   ClientType type_() {
-    if (isFileTransfer) {
-      return ClientType.file;
-    } else if (isViewCamera) {
-      return ClientType.camera;
-    } else if (isTerminal) {
-      return ClientType.terminal;
-    } else if (portForward.isNotEmpty) {
-      return ClientType.portForward;
-    } else {
-      return ClientType.remote;
-    }
+    return ClientType.remote;
   }
 }
 

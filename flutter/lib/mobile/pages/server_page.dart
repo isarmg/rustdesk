@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/mobile/widgets/dialog.dart';
-import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
@@ -248,8 +247,7 @@ class ServiceNotRunningNotification extends StatelessWidget {
             ElevatedButton.icon(
                 icon: const Icon(Icons.play_arrow),
                 onPressed: () {
-                  if (gFFI.userModel.userName.value.isEmpty &&
-                      bind.mainGetLocalOption(key: "show-scam-warning") !=
+                  if (bind.mainGetLocalOption(key: "show-scam-warning") !=
                           "N") {
                     showScamWarning(context, serverModel);
                   } else {
@@ -605,8 +603,7 @@ class _PermissionCheckerState extends State<PermissionChecker> {
                 translate("Screen Capture"),
                 serverModel.mediaOk,
                 !serverModel.mediaOk &&
-                        gFFI.userModel.userName.value.isEmpty &&
-                        bind.mainGetLocalOption(key: "show-scam-warning") != "N"
+                          bind.mainGetLocalOption(key: "show-scam-warning") != "N"
                     ? () => showScamWarning(context, serverModel)
                     : serverModel.toggleService),
           PermissionRow(
@@ -614,12 +611,7 @@ class _PermissionCheckerState extends State<PermissionChecker> {
             serverModel.inputOk,
             serverModel.toggleInput,
           ),
-          PermissionRow(
-            translate("Transfer file"),
-            serverModel.fileOk,
-            serverModel.toggleFile,
-            enabled: !permissionChangeLocked,
-          ),
+
           hasAudioPermission
               ? PermissionRow(translate("Audio Capture"), serverModel.audioOk,
                   serverModel.toggleAudio,
@@ -676,32 +668,13 @@ class ConnectionManager extends StatelessWidget {
     return Column(
         children: serverModel.clients
             .map((client) => PaddingCard(
-                title: translate(
-                    client.isFileTransfer ? "Transfer file" : "Share screen"),
-                titleIcon: client.isFileTransfer
-                    ? Icon(Icons.folder_outlined)
-                    : Icon(Icons.mobile_screen_share),
+                title: translate("Share screen"),
+                titleIcon: Icon(Icons.mobile_screen_share),
                 child: Column(children: [
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Expanded(child: ClientInfo(client)),
-                      Expanded(
-                          flex: -1,
-                          child: client.isFileTransfer || !client.authorized
-                              ? const SizedBox.shrink()
-                              : IconButton(
-                                  onPressed: () {
-                                    gFFI.chatModel.changeCurrentKey(
-                                        MessageKey(client.peerId, client.id));
-                                    final bar = navigationBarKey.currentWidget;
-                                    if (bar != null) {
-                                      bar as BottomNavigationBar;
-                                      bar.onTap!(1);
-                                    }
-                                  },
-                                  icon: unreadTopRightBuilder(
-                                      client.unreadChatMessageCount)))
                     ],
                   ),
                   client.authorized
@@ -713,8 +686,6 @@ class ConnectionManager extends StatelessWidget {
                   client.authorized
                       ? _buildDisconnectButton(client)
                       : _buildNewConnectionHint(serverModel, client),
-                  if (client.incomingVoiceCall && !client.inVoiceCall)
-                    ..._buildNewVoiceCallHint(context, serverModel, client),
                 ])))
             .toList());
   }
@@ -729,34 +700,10 @@ class ConnectionManager extends StatelessWidget {
       },
       label: Text(translate("Disconnect")),
     );
-    final buttons = [disconnectButton];
-    if (client.inVoiceCall) {
-      buttons.insert(
-        0,
-        ElevatedButton.icon(
-          style: ButtonStyle(
-              backgroundColor: MaterialStatePropertyAll(Colors.red)),
-          icon: const Icon(Icons.phone),
-          label: Text(translate("Stop")),
-          onPressed: () {
-            bind.cmCloseVoiceCall(id: client.id);
-            gFFI.invokeMethod("cancel_notification", client.id);
-          },
-        ),
-      );
-    }
-
-    if (buttons.length == 1) {
-      return Container(
-        alignment: Alignment.centerRight,
-        child: disconnectButton,
-      );
-    } else {
-      return Row(
-        children: buttons,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      );
-    }
+    return Container(
+      alignment: Alignment.centerRight,
+      child: disconnectButton,
+    );
   }
 
   Widget _buildNewConnectionHint(ServerModel serverModel, Client client) {
@@ -776,29 +723,7 @@ class ConnectionManager extends StatelessWidget {
     ]);
   }
 
-  List<Widget> _buildNewVoiceCallHint(
-      BuildContext context, ServerModel serverModel, Client client) {
-    return [
-      Text(
-        translate("android_new_voice_call_tip"),
-        style: Theme.of(context).textTheme.bodyMedium,
-      ).marginOnly(bottom: 5),
-      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-        TextButton(
-            child: Text(translate("Dismiss")),
-            onPressed: () {
-              serverModel.handleVoiceCall(client, false);
-            }).marginOnly(right: 15),
-        if (serverModel.approveMode != 'password')
-          ElevatedButton.icon(
-              icon: const Icon(Icons.check),
-              label: Text(translate("Accept")),
-              onPressed: () {
-                serverModel.handleVoiceCall(client, true);
-              }),
-      ])
-    ];
-  }
+
 }
 
 class PaddingCard extends StatelessWidget {

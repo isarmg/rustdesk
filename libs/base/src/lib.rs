@@ -1,5 +1,4 @@
 pub mod config;
-pub mod fs;
 pub mod keyboard;
 pub mod platform;
 pub mod protos;

@@ -26,7 +26,6 @@ use hbb_common::{
     ResultType, Stream,
 };
 use base::message_proto::*;
-use scrap::camera;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use service::ServiceTmpl;
 use service::{EmptyExtraFieldService, GenericService, Service, Subscriber};
@@ -35,10 +34,6 @@ use video_service::VideoSource;
 use crate::ipc::Data;
 
 pub mod audio_service;
-#[cfg(target_os = "windows")]
-pub mod terminal_helper;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub mod terminal_service;
 cfg_if::cfg_if! {
 if #[cfg(not(target_os = "ios"))] {
 mod clipboard_service;
@@ -71,17 +66,12 @@ pub mod input_service {
 }
 
 mod connection;
-mod login_failure_check;
-pub(crate) mod port_forward_mux;
 pub mod display_service;
 #[cfg(windows)]
 pub mod portable_service;
 mod service;
 mod video_qos;
 pub mod video_service;
-
-#[cfg(all(target_os = "windows", feature = "flutter"))]
-pub mod printer_service;
 
 pub type Childs = Arc<Mutex<Vec<std::process::Child>>>;
 type ConnMap = HashMap<i32, ConnInner>;
@@ -101,14 +91,6 @@ const CONFIG_SYNC_INITIAL_WAIT_SECS: u64 = 3;
 
 lazy_static::lazy_static! {
     pub static ref CHILD_PROCESS: Childs = Default::default();
-    // A client server used to provide local services(audio, video, clipboard, etc.)
-    // for all initiative connections.
-    //
-    // [Note]
-    // ugly
-    // Now we use this [`CLIENT_SERVER`] to do following operations:
-    // - record local audio, and send to remote
-    pub static ref CLIENT_SERVER: ServerPtr = new();
 }
 
 pub struct Server {
@@ -142,40 +124,16 @@ pub fn new() -> ServerPtr {
         server.add_service(Box::new(clipboard_service::new(
             clipboard_service::NAME.to_owned(),
         )));
-        #[cfg(feature = "unix-file-copy-paste")]
-        server.add_service(Box::new(clipboard_service::new(
-            clipboard_service::FILE_NAME.to_owned(),
-        )));
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         if !display_service::capture_cursor_embedded() {
             server.add_service(Box::new(input_service::new_cursor()));
             server.add_service(Box::new(input_service::new_pos()));
-            #[cfg(target_os = "linux")]
-            if scrap::is_x11() {
-                // wayland does not support multiple displays currently
-                server.add_service(Box::new(input_service::new_window_focus()));
-            }
             #[cfg(not(target_os = "linux"))]
             server.add_service(Box::new(input_service::new_window_focus()));
         }
     }
-    #[cfg(all(target_os = "windows", feature = "flutter"))]
-    {
-        match printer_service::init(&crate::get_app_name()) {
-            Ok(()) => {
-                log::info!("printer service initialized");
-                server.add_service(Box::new(printer_service::new(
-                    printer_service::NAME.to_owned(),
-                )));
-            }
-            Err(e) => {
-                log::error!("printer service init failed: {}", e);
-            }
-        }
-    }
-    // Terminal service is created per connection, not globally
     Arc::new(RwLock::new(server))
 }
 
@@ -427,21 +385,6 @@ async fn create_relay_connection_(
 impl Server {
     fn is_video_service_name(name: &str) -> bool {
         name.starts_with(VideoSource::Monitor.service_name_prefix())
-            || name.starts_with(VideoSource::Camera.service_name_prefix())
-    }
-
-    pub fn try_add_primary_camera_service(&mut self) {
-        if !camera::primary_camera_exists() {
-            return;
-        }
-        let primary_camera_name =
-            video_service::get_service_name(VideoSource::Camera, camera::PRIMARY_CAMERA_IDX);
-        if !self.contains(&primary_camera_name) {
-            self.add_service(Box::new(video_service::new(
-                VideoSource::Camera,
-                camera::PRIMARY_CAMERA_IDX,
-            )));
-        }
     }
 
     pub fn try_add_monitor_service(&mut self, display_idx: usize) {
@@ -453,17 +396,6 @@ impl Server {
                 display_idx,
             )));
         }
-    }
-
-    pub fn add_camera_connection(&mut self, conn: ConnInner) {
-        if camera::primary_camera_exists() {
-            let primary_camera_name =
-                video_service::get_service_name(VideoSource::Camera, camera::PRIMARY_CAMERA_IDX);
-            if let Some(s) = self.services.get(&primary_camera_name) {
-                s.on_subscribe(conn.clone());
-            }
-        }
-        self.connections.insert(conn.id(), conn);
     }
 
     pub fn add_monitor_connection(
@@ -688,13 +620,8 @@ pub async fn start_server(is_server: bool, no_server: bool) {
         });
         // Warm the DRM availability cache before any client connects, so the first connection does
         // not race a cold `_drm` probe and ship an empty display list ("No displays" + retry).
-        // X11 is skipped -- probing there makes the root service open DRM readers for a path this
-        // session can never take -- but that decision belongs to `warm_availability`, which already
-        // makes it, and NOT to this call site. Deciding it here is the same one-shot-at-startup
-        // mistake the pre-warm had: `is_x11()` answers "x11" whenever loginctl cannot yet name the
-        // seat0 session, which during a boot is exactly when this runs, and nothing revisits it --
-        // so a Wayland host that came up slowly skipped the warm for the life of the process and
-        // got back the cold-probe "No displays" symptom the warm exists to remove.
+        // Session identification is retried inside warm_availability because logind may not
+        // have identified the Wayland session yet during boot.
         #[cfg(all(target_os = "linux", feature = "drm"))]
         if let Err(err) = std::thread::Builder::new()
             .name("drm-warm".into())

@@ -5,6 +5,9 @@
 
 pub use hbb_common::config::keys::*;
 
+pub const OPTION_STREAMING_MODE: &str = "streaming-mode";
+pub const OPTION_STREAMING_FPS: &str = "streaming-fps";
+
 pub const OPTION_VIEW_ONLY: &str = "view_only";
 pub const OPTION_SHOW_MONITORS_TOOLBAR: &str = "show_monitors_toolbar";
 pub const OPTION_SHOW_REMOTE_CURSOR: &str = "show_remote_cursor";

@@ -174,15 +174,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                           hostname: '',
                           alias: '',
                           platform: '',
-                          tags: [],
-                          hash: '',
-                          password: '',
                           forceAlwaysRelay: false,
-                          rdpPort: '',
-                          rdpUsername: '',
-                          loginName: '',
-                          device_group_name: '',
-                          note: '',
                         );
                         _autocompleteOpts = [emptyPeer];
                       } else {

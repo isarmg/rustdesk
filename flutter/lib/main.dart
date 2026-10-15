@@ -10,11 +10,7 @@ import 'package:flutter_hbb/common/widgets/overlay.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/pages/install_page.dart';
 import 'package:flutter_hbb/desktop/pages/server_page.dart';
-import 'package:flutter_hbb/desktop/screen/desktop_file_transfer_screen.dart';
-import 'package:flutter_hbb/desktop/screen/desktop_view_camera_screen.dart';
-import 'package:flutter_hbb/desktop/screen/desktop_port_forward_screen.dart';
 import 'package:flutter_hbb/desktop/screen/desktop_remote_screen.dart';
-import 'package:flutter_hbb/desktop/screen/desktop_terminal_screen.dart';
 import 'package:flutter_hbb/desktop/widgets/refresh_wrapper.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
@@ -27,7 +23,6 @@ import 'common.dart';
 import 'consts.dart';
 import 'mobile/pages/home_page.dart';
 import 'mobile/pages/server_page.dart';
-import 'mobile/widgets/deploy_dialog.dart';
 import 'models/platform_model.dart';
 
 /// Basic window and launch properties.
@@ -69,33 +64,7 @@ Future<void> main(List<String> args) async {
           kAppTypeDesktopRemote,
         );
         break;
-      case WindowType.FileTransfer:
-        desktopType = DesktopType.fileTransfer;
-        runMultiWindow(
-          argument,
-          kAppTypeDesktopFileTransfer,
-        );
-        break;
-      case WindowType.ViewCamera:
-        desktopType = DesktopType.viewCamera;
-        runMultiWindow(
-          argument,
-          kAppTypeDesktopViewCamera,
-        );
-        break;
-      case WindowType.PortForward:
-        desktopType = DesktopType.portForward;
-        runMultiWindow(
-          argument,
-          kAppTypeDesktopPortForward,
-        );
-        break;
-      case WindowType.Terminal:
-        desktopType = DesktopType.terminal;
-        runMultiWindow(
-          argument,
-          kAppTypeDesktopTerminal,
-        );
+
       default:
         break;
     }
@@ -139,8 +108,6 @@ void runMainApp(bool startService) async {
   if (startService) {
     gFFI.serverModel.startService();
   }
-  await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
-  gFFI.userModel.refreshCurrentUser();
   runApp(App());
 
   bool? alwaysOnTop;
@@ -179,8 +146,6 @@ void runMobileApp() async {
   if (isAndroid) androidChannelInit();
   if (isAndroid) platformFFI.syncAndroidServiceAppDirConfigPath();
   draggablePositions.load();
-  await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
-  gFFI.userModel.refreshCurrentUser();
   runApp(App());
   await initUniLinks();
 }
@@ -204,27 +169,7 @@ void runMultiWindow(
         params: argument,
       );
       break;
-    case kAppTypeDesktopFileTransfer:
-      widget = DesktopFileTransferScreen(
-        params: argument,
-      );
-      break;
-    case kAppTypeDesktopViewCamera:
-      draggablePositions.load();
-      widget = DesktopViewCameraScreen(
-        params: argument,
-      );
-      break;
-    case kAppTypeDesktopPortForward:
-      widget = DesktopPortForwardScreen(
-        params: argument,
-      );
-      break;
-    case kAppTypeDesktopTerminal:
-      widget = DesktopTerminalScreen(
-        params: argument,
-      );
-      break;
+
     default:
       // no such appType
       exit(0);
@@ -251,29 +196,7 @@ void runMultiWindow(
         );
       }
       break;
-    case kAppTypeDesktopFileTransfer:
-      await restoreWindowPosition(WindowType.FileTransfer,
-          windowId: kWindowId!);
-      break;
-    case kAppTypeDesktopViewCamera:
-      // If screen rect is set, the window will be moved to the target screen and then set fullscreen.
-      if (argument['screen_rect'] == null) {
-        // display can be used to control the offset of the window.
-        await restoreWindowPosition(
-          WindowType.ViewCamera,
-          windowId: kWindowId!,
-          peerId: argument['id'] as String?,
-          // FIXME: fix display index.
-          display: argument['display'] as int?,
-        );
-      }
-      break;
-    case kAppTypeDesktopPortForward:
-      await restoreWindowPosition(WindowType.PortForward, windowId: kWindowId!);
-      break;
-    case kAppTypeDesktopTerminal:
-      await restoreWindowPosition(WindowType.Terminal, windowId: kWindowId!);
-      break;
+
     default:
       // no such appType
       exit(0);
@@ -563,14 +486,6 @@ _registerEventHandler() {
     });
     platformFFI.registerEventHandler('language', 'language', (_) async {
       reloadAllWindows();
-    });
-  }
-  if (isAndroid) {
-    platformFFI.registerEventHandler(
-        'android_needs_deploy', 'android_needs_deploy', (_) async {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        showDeployPromptDialog();
-      });
     });
   }
 }

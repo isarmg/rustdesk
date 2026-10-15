@@ -813,5 +813,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("shortcut-key-not-supported", "“{}” 不能用作快捷键。"),
         ("On", "开"),
         ("Off", "关"),
+        ("Streaming mode", "串流模式"),
+        ("Enable streaming mode", "启用串流模式"),
     ].iter().cloned().collect();
 }

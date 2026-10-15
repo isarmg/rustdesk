@@ -1,15 +1,14 @@
 use serde_derive::{Deserialize, Serialize};
 
 mod client;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod server;
 
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "linux")]
-mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "windows")]
 mod win_linux;
 
 #[cfg(target_os = "windows")]
@@ -17,9 +16,12 @@ use windows::create_event_loop;
 #[cfg(target_os = "macos")]
 use macos::create_event_loop;
 #[cfg(target_os = "linux")]
-pub use linux::is_supported;
+pub fn is_supported() -> bool {
+    false
+}
 
 pub use client::*;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub use server::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

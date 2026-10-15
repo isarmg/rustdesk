@@ -23,7 +23,6 @@ lazy_static::lazy_static! {
 }
 
 pub const DISPLAY_SERVER_WAYLAND: &str = "wayland";
-pub const DISPLAY_SERVER_X11: &str = "x11";
 pub const DISPLAY_DESKTOP_KDE: &str = "KDE";
 
 pub const XDG_CURRENT_DESKTOP: &str = "XDG_CURRENT_DESKTOP";
@@ -83,11 +82,6 @@ pub fn is_desktop_wayland() -> bool {
     get_display_server() == DISPLAY_SERVER_WAYLAND
 }
 
-#[inline]
-pub fn is_x11_or_headless() -> bool {
-    !is_desktop_wayland()
-}
-
 // -1
 const INVALID_SESSION: &str = "4294967295";
 
@@ -99,7 +93,7 @@ pub fn get_display_server() -> String {
 
     // Check if `loginctl` can be called successfully
     if run_loginctl(None).is_err() {
-        return DISPLAY_SERVER_X11.to_owned();
+        return std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_lowercase();
     }
 
     let mut session = get_values_of_seat0(&[0])[0].clone();
@@ -117,7 +111,7 @@ pub fn get_display_server() -> String {
         }
     }
     if session.is_empty() {
-        std::env::var("XDG_SESSION_TYPE").unwrap_or("x11".to_owned())
+        std::env::var("XDG_SESSION_TYPE").unwrap_or_default().to_lowercase()
     } else {
         get_display_server_of_session(&session)
     }
@@ -141,7 +135,7 @@ pub fn get_display_server_of_session(session: &str) -> String {
                 return sestype.to_lowercase();
             }
         }
-        display_server = "x11".to_owned();
+        display_server.clear();
     }
     display_server.to_lowercase()
 }

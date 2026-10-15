@@ -1,10 +1,6 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::keyboard::input_source::{change_input_source, get_cur_session_input_source};
-#[cfg(target_os = "linux")]
-use crate::platform::linux::is_x11;
 use crate::{
-    client::file_trait::FileManager,
-    common::{make_fd_to_json, make_vec_fd_to_json},
     flutter::{
         self, session_add, session_add_existed, session_start_, sessions, try_sync_peer_option,
     },
@@ -18,10 +14,7 @@ use hbb_common::{
     rendezvous_proto::ConnType,
     ResultType,
 };
-use base::{
-    config::keys,
-    fs,
-};
+use base::config::keys;
 use std::{
     collections::HashMap,
     sync::{
@@ -114,20 +107,8 @@ pub fn host_stop_system_key_propagate(_stopped: bool) {
 }
 
 // This function is only used to count the number of control sessions.
-pub fn peer_get_sessions_count(id: String, conn_type: i32) -> SyncReturn<usize> {
-    let conn_type = if conn_type == ConnType::VIEW_CAMERA as i32 {
-        ConnType::VIEW_CAMERA
-    } else if conn_type == ConnType::FILE_TRANSFER as i32 {
-        ConnType::FILE_TRANSFER
-    } else if conn_type == ConnType::PORT_FORWARD as i32 {
-        ConnType::PORT_FORWARD
-    } else if conn_type == ConnType::RDP as i32 {
-        ConnType::RDP
-    } else if conn_type == ConnType::TERMINAL as i32 {
-        ConnType::TERMINAL
-    } else {
-        ConnType::DEFAULT_CONN
-    };
+pub fn peer_get_sessions_count(id: String) -> SyncReturn<usize> {
+    let conn_type = ConnType::DEFAULT_CONN;
     SyncReturn(sessions::get_session_count(id, conn_type))
 }
 
@@ -135,9 +116,8 @@ pub fn session_add_existed_sync(
     id: String,
     session_id: SessionID,
     displays: Vec<i32>,
-    is_view_camera: bool,
 ) -> SyncReturn<String> {
-    if let Err(e) = session_add_existed(id.clone(), session_id, displays, is_view_camera) {
+    if let Err(e) = session_add_existed(id.clone(), session_id, displays) {
         SyncReturn(format!("Failed to add session with id {}, {}", &id, e))
     } else {
         SyncReturn("".to_owned())
@@ -147,11 +127,6 @@ pub fn session_add_existed_sync(
 pub fn session_add_sync(
     session_id: SessionID,
     id: String,
-    is_file_transfer: bool,
-    is_view_camera: bool,
-    is_port_forward: bool,
-    is_rdp: bool,
-    is_terminal: bool,
     switch_uuid: String,
     force_relay: bool,
     password: String,
@@ -161,22 +136,12 @@ pub fn session_add_sync(
     let add_res = session_add(
         &session_id,
         &id,
-        is_file_transfer,
-        is_view_camera,
-        is_port_forward,
-        is_rdp,
-        is_terminal,
         &switch_uuid,
         force_relay,
         password,
         is_shared_password,
         conn_token,
     );
-    // We can't put the remove call together with `std::env::var("IS_TERMINAL_ADMIN")`.
-    // Because there are some `bail!` in `session_add()`, we must make sure `IS_TERMINAL_ADMIN` is removed at last.
-    if is_terminal {
-        std::env::remove_var("IS_TERMINAL_ADMIN");
-    }
 
     if let Err(e) = add_res {
         SyncReturn(format!("Failed to add session with id {}, {}", &id, e))
@@ -337,20 +302,6 @@ pub fn session_is_multi_ui_session(session_id: SessionID) -> SyncReturn<bool> {
     }
 }
 
-pub fn session_record_screen(session_id: SessionID, start: bool) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.record_screen(start);
-    }
-}
-
-pub fn session_get_is_recording(session_id: SessionID) -> SyncReturn<bool> {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        SyncReturn(session.is_recording())
-    } else {
-        SyncReturn(false)
-    }
-}
-
 pub fn session_reconnect(session_id: SessionID, force_relay: bool) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.reconnect(force_relay);
@@ -373,12 +324,7 @@ pub fn session_toggle_option(session_id: SessionID, value: String) {
     {
         crate::flutter::update_text_clipboard_required();
     }
-    #[cfg(feature = "unix-file-copy-paste")]
-    if sessions::get_session_by_session_id(&session_id).is_some()
-        && (value == keys::OPTION_ENABLE_FILE_COPY_PASTE || value == "view-only")
-    {
-        crate::flutter::update_file_clipboard_required();
-    }
+
 }
 
 pub fn session_toggle_privacy_mode(session_id: SessionID, impl_key: String, on: bool) {
@@ -703,43 +649,6 @@ pub fn session_input_string(session_id: SessionID, value: String) {
     }
 }
 
-// chat_client_mode
-pub fn session_send_chat(session_id: SessionID, text: String) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.send_chat(text);
-    }
-}
-
-// Terminal functions
-pub fn session_open_terminal(session_id: SessionID, terminal_id: i32, rows: u32, cols: u32) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.open_terminal(terminal_id, rows, cols);
-    } else {
-        log::error!(
-            "[flutter_ffi] Session not found for session_id: {}",
-            session_id
-        );
-    }
-}
-
-pub fn session_send_terminal_input(session_id: SessionID, terminal_id: i32, data: String) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.send_terminal_input(terminal_id, data);
-    }
-}
-
-pub fn session_resize_terminal(session_id: SessionID, terminal_id: i32, rows: u32, cols: u32) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.resize_terminal(terminal_id, rows, cols);
-    }
-}
-
-pub fn session_close_terminal(session_id: SessionID, terminal_id: i32) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.close_terminal(terminal_id);
-    }
-}
-
 pub fn session_peer_option(session_id: SessionID, name: String, value: String) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.set_option(name, value);
@@ -756,187 +665,6 @@ pub fn session_get_peer_option(session_id: SessionID, name: String) -> String {
 pub fn session_input_os_password(session_id: SessionID, value: String) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.input_os_password(value, true);
-    }
-}
-
-// File Action
-pub fn session_read_remote_dir(session_id: SessionID, path: String, include_hidden: bool) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.read_remote_dir(path, include_hidden);
-    }
-}
-
-pub fn session_send_files(
-    session_id: SessionID,
-    act_id: i32,
-    path: String,
-    to: String,
-    file_num: i32,
-    include_hidden: bool,
-    is_remote: bool,
-    _is_dir: bool,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.send_files(
-            act_id,
-            fs::JobType::Generic.into(),
-            path,
-            to,
-            file_num,
-            include_hidden,
-            is_remote,
-        );
-    }
-}
-
-pub fn session_set_confirm_override_file(
-    session_id: SessionID,
-    act_id: i32,
-    file_num: i32,
-    need_override: bool,
-    remember: bool,
-    is_upload: bool,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.set_confirm_override_file(act_id, file_num, need_override, remember, is_upload);
-    }
-}
-
-pub fn session_remove_file(
-    session_id: SessionID,
-    act_id: i32,
-    path: String,
-    file_num: i32,
-    is_remote: bool,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.remove_file(act_id, path, file_num, is_remote);
-    }
-}
-
-pub fn session_read_dir_to_remove_recursive(
-    session_id: SessionID,
-    act_id: i32,
-    path: String,
-    is_remote: bool,
-    show_hidden: bool,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.remove_dir_all(act_id, path, is_remote, show_hidden);
-    }
-}
-
-pub fn session_remove_all_empty_dirs(
-    session_id: SessionID,
-    act_id: i32,
-    path: String,
-    is_remote: bool,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.remove_dir(act_id, path, is_remote);
-    }
-}
-
-pub fn session_cancel_job(session_id: SessionID, act_id: i32) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.cancel_job(act_id);
-    }
-}
-
-pub fn session_create_dir(session_id: SessionID, act_id: i32, path: String, is_remote: bool) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.create_dir(act_id, path, is_remote);
-    }
-}
-
-pub fn session_read_local_dir_sync(
-    _session_id: SessionID,
-    path: String,
-    show_hidden: bool,
-) -> String {
-    if let Ok(fd) = fs::read_dir(&fs::get_path(&path), show_hidden) {
-        return make_fd_to_json(fd.id, path, &fd.entries);
-    }
-    "".to_string()
-}
-
-pub fn session_read_local_empty_dirs_recursive_sync(
-    _session_id: SessionID,
-    path: String,
-    include_hidden: bool,
-) -> String {
-    if let Ok(fds) = fs::get_empty_dirs_recursive(&path, include_hidden) {
-        return make_vec_fd_to_json(&fds);
-    }
-    "".to_string()
-}
-
-pub fn session_read_remote_empty_dirs_recursive_sync(
-    session_id: SessionID,
-    path: String,
-    include_hidden: bool,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.read_empty_dirs(path, include_hidden);
-    }
-}
-
-pub fn session_get_platform(session_id: SessionID, is_remote: bool) -> String {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        return session.get_platform(is_remote);
-    }
-    "".to_string()
-}
-
-pub fn session_load_last_transfer_jobs(session_id: SessionID) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        return session.load_last_jobs();
-    } else {
-        // a tip for flutter dev
-        eprintln!(
-            "cannot load last transfer job from non-existed session. Please ensure session \
-        is connected before calling load last transfer jobs."
-        );
-    }
-}
-
-pub fn session_add_job(
-    session_id: SessionID,
-    act_id: i32,
-    path: String,
-    to: String,
-    file_num: i32,
-    include_hidden: bool,
-    is_remote: bool,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.add_job(
-            act_id,
-            fs::JobType::Generic.into(),
-            path,
-            to,
-            file_num,
-            include_hidden,
-            is_remote,
-        );
-    }
-}
-
-pub fn session_resume_job(session_id: SessionID, act_id: i32, is_remote: bool) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.resume_job(act_id, is_remote);
-    }
-}
-
-pub fn session_rename_file(
-    session_id: SessionID,
-    act_id: i32,
-    path: String,
-    new_name: String,
-    is_remote: bool,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.rename_file(act_id, path, new_name, is_remote);
     }
 }
 
@@ -993,10 +721,6 @@ pub fn main_get_async_status() -> String {
     get_async_job_status()
 }
 
-pub fn main_get_http_status(url: String) -> Option<String> {
-    get_async_http_status(url)
-}
-
 pub fn main_get_option(key: String) -> String {
     get_option(key)
 }
@@ -1013,7 +737,6 @@ pub fn main_set_option(key: String, value: String) {
     #[cfg(target_os = "android")]
     {
         let is_permission_option = key.eq(keys::OPTION_ENABLE_CLIPBOARD)
-            || key.eq(keys::OPTION_ENABLE_FILE_TRANSFER)
             || key.eq(keys::OPTION_ENABLE_AUDIO);
         let allow_perm_change_in_accept_window = config::option2bool(
             keys::OPTION_ENABLE_PERM_CHANGE_IN_ACCEPT_WINDOW,
@@ -1088,7 +811,6 @@ pub fn main_set_options(json: String) {
         if !allow_perm_change_in_accept_window && crate::ui_cm_interface::has_active_clients() {
             for key in [
                 keys::OPTION_ENABLE_CLIPBOARD,
-                keys::OPTION_ENABLE_FILE_TRANSFER,
                 keys::OPTION_ENABLE_AUDIO,
             ] {
                 if let Some(value) = map.remove(key) {
@@ -1191,30 +913,6 @@ pub fn main_get_api_server() -> String {
     get_api_server()
 }
 
-pub fn main_deploy_device(token: String, id: String) -> String {
-    #[cfg(target_os = "android")]
-    {
-        let new_id = match id.trim() {
-            "" => None,
-            id => Some(id.to_owned()),
-        };
-        ui_interface::deploy_device(token, new_id).message()
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (token, id);
-        "Deployment is not supported on this platform.".to_owned()
-    }
-}
-
-pub fn main_resolve_avatar_url(avatar: String) -> SyncReturn<String> {
-    SyncReturn(resolve_avatar_url(avatar))
-}
-
-pub fn main_http_request(url: String, method: String, body: Option<String>, header: String) {
-    http_request(url, method, body, header)
-}
-
 pub fn main_get_local_option(key: String) -> SyncReturn<String> {
     SyncReturn(get_local_option(key))
 }
@@ -1261,7 +959,7 @@ pub fn main_set_local_option(key: String, value: String) {
     let is_d3d_render_key = key.eq(keys::OPTION_ALLOW_D3D_RENDER);
     set_local_option(key, value.clone());
     let is_render_target =
-        |session: &crate::flutter::FlutterSession| session.is_default() || session.is_view_camera();
+        |session: &crate::flutter::FlutterSession| session.is_default();
     if is_texture_render_key {
         let session_event = [("v", &value)];
         for session in sessions::get_sessions() {
@@ -1526,23 +1224,6 @@ pub fn main_load_recent_peers() {
     }
 }
 
-pub fn main_load_recent_peers_for_ab(filter: String) -> String {
-    let id_filters = serde_json::from_str::<Vec<String>>(&filter).unwrap_or_default();
-    let id_filters = if id_filters.is_empty() {
-        None
-    } else {
-        Some(id_filters)
-    };
-    if !config::APP_DIR.read().unwrap().is_empty() {
-        let peers: Vec<HashMap<&str, String>> = PeerConfig::peers(id_filters)
-            .drain(..)
-            .map(|(id, _, p)| peer_to_map(id, p))
-            .collect();
-        return serde_json::ser::to_string(&peers).unwrap_or("".to_owned());
-    }
-    "".to_string()
-}
-
 pub fn main_load_fav_peers() {
     let push_to_flutter = |peers| {
         let data = HashMap::from([("name", "load_fav_peers".to_owned()), ("peers", peers)]);
@@ -1625,10 +1306,6 @@ pub fn main_change_language(lang: String) {
     send_to_cm(&crate::ipc::Data::Language(lang));
 }
 
-pub fn main_video_save_directory(root: bool) -> SyncReturn<String> {
-    SyncReturn(video_save_directory(root))
-}
-
 pub fn main_set_user_default_option(key: String, value: String) {
     set_user_default_option(key, value);
 }
@@ -1653,11 +1330,7 @@ pub fn main_get_main_display() -> SyncReturn<String> {
     #[cfg(not(target_os = "ios"))]
     {
         #[cfg(not(target_os = "linux"))]
-        let is_linux_wayland = false;
-        #[cfg(target_os = "linux")]
-        let is_linux_wayland = !is_x11();
-
-        if !is_linux_wayland {
+        {
             if let Ok(displays) = crate::display_service::try_get_displays() {
                 // to-do: Need to detect current display index.
                 if let Some(display) = displays.iter().next() {
@@ -1671,7 +1344,7 @@ pub fn main_get_main_display() -> SyncReturn<String> {
         }
 
         #[cfg(target_os = "linux")]
-        if is_linux_wayland {
+        if crate::platform::linux::is_wayland_session_available() {
             let displays = scrap::wayland::display::get_displays();
             if let Some(display) = displays.displays.get(displays.primary) {
                 let logical_size = display
@@ -1713,41 +1386,6 @@ pub fn main_get_displays() -> SyncReturn<String> {
     SyncReturn(display_info)
 }
 
-pub fn session_add_port_forward(
-    session_id: SessionID,
-    local_port: i32,
-    remote_host: String,
-    remote_port: i32,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.add_port_forward(local_port, remote_host, remote_port);
-    }
-}
-
-pub fn session_remove_port_forward(session_id: SessionID, local_port: i32) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.remove_port_forward(local_port);
-    }
-}
-
-pub fn session_new_rdp(session_id: SessionID) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.new_rdp();
-    }
-}
-
-pub fn session_request_voice_call(session_id: SessionID) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.request_voice_call();
-    }
-}
-
-pub fn session_close_voice_call(session_id: SessionID) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.close_voice_call();
-    }
-}
-
 pub fn session_get_conn_token(session_id: SessionID) -> SyncReturn<Option<String>> {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         SyncReturn(session.get_conn_token())
@@ -1756,47 +1394,12 @@ pub fn session_get_conn_token(session_id: SessionID) -> SyncReturn<Option<String
     }
 }
 
-pub fn cm_handle_incoming_voice_call(id: i32, accept: bool) {
-    crate::ui_cm_interface::handle_incoming_voice_call(id, accept);
-}
-
-pub fn cm_close_voice_call(id: i32) {
-    crate::ui_cm_interface::close_voice_call(id);
-}
-
-pub fn set_voice_call_input_device(_is_cm: bool, _device: String) {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if _is_cm {
-        let _ = crate::ipc::set_config("voice-call-input", _device);
-    } else {
-        crate::audio_service::set_voice_call_input_device(Some(_device), true);
-    }
-}
-
-pub fn get_voice_call_input_device(_is_cm: bool) -> String {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    if _is_cm {
-        match crate::ipc::get_config("voice-call-input") {
-            Ok(Some(device)) => device,
-            _ => "".to_owned(),
-        }
-    } else {
-        crate::audio_service::get_voice_call_input_device().unwrap_or_default()
-    }
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    "".to_owned()
-}
-
 pub fn main_get_last_remote_id() -> String {
     LocalConfig::get_remote_id()
 }
 
 pub fn main_get_software_update_url() {
     crate::common::check_software_update();
-}
-
-pub fn main_get_home_dir() -> String {
-    fs::get_home_as_string()
 }
 
 pub fn main_get_langs() -> String {
@@ -1885,42 +1488,6 @@ pub fn main_start_dbus_server() {
             let _ = start_dbus_server();
         });
     }
-}
-
-pub fn main_save_ab(json: String) {
-    if json.len() > 1024 {
-        std::thread::spawn(|| {
-            config::Ab::store(json);
-        });
-    } else {
-        config::Ab::store(json);
-    }
-}
-
-pub fn main_clear_ab() {
-    config::Ab::remove();
-}
-
-pub fn main_load_ab() -> String {
-    serde_json::to_string(&config::Ab::load()).unwrap_or_default()
-}
-
-pub fn main_save_group(json: String) {
-    if json.len() > 1024 {
-        std::thread::spawn(|| {
-            config::Group::store(json);
-        });
-    } else {
-        config::Group::store(json);
-    }
-}
-
-pub fn main_clear_group() {
-    config::Group::remove();
-}
-
-pub fn main_load_group() -> String {
-    serde_json::to_string(&config::Group::load()).unwrap_or_default()
 }
 
 pub fn session_send_pointer(session_id: SessionID, msg: String) {
@@ -2065,43 +1632,6 @@ pub fn session_restart_remote_device(session_id: SessionID) {
     }
 }
 
-pub fn session_get_audit_server_sync(session_id: SessionID, typ: String) -> SyncReturn<String> {
-    let res = if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.get_audit_server(typ)
-    } else {
-        "".to_owned()
-    };
-    SyncReturn(res)
-}
-
-pub fn session_send_note(session_id: SessionID, note: String) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.send_note(note)
-    }
-}
-
-pub fn session_get_last_audit_note(session_id: SessionID) -> SyncReturn<String> {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        SyncReturn(session.last_audit_note.lock().unwrap().clone())
-    } else {
-        SyncReturn("".to_owned())
-    }
-}
-
-pub fn session_set_audit_guid(session_id: SessionID, guid: String) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        *session.audit_guid.lock().unwrap() = guid;
-    }
-}
-
-pub fn session_get_audit_guid(session_id: SessionID) -> SyncReturn<String> {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        SyncReturn(session.audit_guid.lock().unwrap().clone())
-    } else {
-        SyncReturn("".to_owned())
-    }
-}
-
 pub fn session_get_conn_session_id(session_id: SessionID) -> SyncReturn<String> {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         SyncReturn(session.lc.read().unwrap().session_id.to_string())
@@ -2134,17 +1664,6 @@ pub fn session_toggle_virtual_display(session_id: SessionID, index: i32, on: boo
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.toggle_virtual_display(index, on);
         flutter::session_update_virtual_display(&session, index, on);
-    }
-}
-
-pub fn session_printer_response(
-    session_id: SessionID,
-    id: i32,
-    path: String,
-    printer_name: String,
-) {
-    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
-        session.printer_response(id, path, printer_name);
     }
 }
 
@@ -2224,11 +1743,6 @@ pub fn main_wol(id: String) {
 pub fn main_create_shortcut(_id: String) {
     #[cfg(windows)]
     create_shortcut(_id);
-}
-
-pub fn cm_send_chat(conn_id: i32, msg: String) {
-    #[cfg(not(any(target_os = "ios")))]
-    crate::ui_cm_interface::send_chat(conn_id, msg);
 }
 
 pub fn cm_login_res(conn_id: i32, res: bool) {
@@ -2394,14 +1908,6 @@ pub fn main_is_can_input_monitoring(prompt: bool) -> SyncReturn<bool> {
     SyncReturn(is_can_input_monitoring(prompt))
 }
 
-pub fn main_is_share_rdp() -> SyncReturn<bool> {
-    SyncReturn(is_share_rdp())
-}
-
-pub fn main_set_share_rdp(enable: bool) {
-    set_share_rdp(enable)
-}
-
 pub fn main_goto_install() -> SyncReturn<bool> {
     goto_install();
     SyncReturn(true)
@@ -2448,20 +1954,6 @@ pub fn install_install_options() -> SyncReturn<String> {
     SyncReturn(install_options())
 }
 
-pub fn main_account_auth(op: String, remember_me: bool) {
-    let id = get_id();
-    let uuid = get_uuid();
-    account_auth(op, id, uuid, remember_me);
-}
-
-pub fn main_account_auth_cancel() {
-    account_auth_cancel()
-}
-
-pub fn main_account_auth_result() -> String {
-    account_auth_result()
-}
-
 pub fn main_on_main_window_close() {
     // may called more than one times
     #[cfg(windows)]
@@ -2480,11 +1972,6 @@ pub fn main_hide_dock() -> SyncReturn<bool> {
     #[cfg(target_os = "macos")]
     crate::platform::macos::hide_dock();
     SyncReturn(true)
-}
-
-pub fn main_has_file_clipboard() -> SyncReturn<bool> {
-    let ret = cfg!(any(target_os = "windows", feature = "unix-file-copy-paste",));
-    SyncReturn(ret)
 }
 
 pub fn main_has_gpu_texture_render() -> SyncReturn<bool> {
@@ -2535,18 +2022,6 @@ pub fn is_custom_client() -> SyncReturn<bool> {
 
 pub fn is_disable_settings() -> SyncReturn<bool> {
     SyncReturn(config::is_disable_settings())
-}
-
-pub fn is_disable_ab() -> SyncReturn<bool> {
-    SyncReturn(config::is_disable_ab())
-}
-
-pub fn is_disable_account() -> SyncReturn<bool> {
-    SyncReturn(config::is_disable_account())
-}
-
-pub fn is_disable_group_panel() -> SyncReturn<bool> {
-    SyncReturn(LocalConfig::get_option("disable-group-panel") == "Y")
 }
 
 // windows only
@@ -2683,35 +2158,8 @@ pub fn main_audio_support_loopback() -> SyncReturn<bool> {
     SyncReturn(is_surpport)
 }
 
-pub fn main_get_printer_names() -> SyncReturn<String> {
-    #[cfg(target_os = "windows")]
-    return SyncReturn(
-        serde_json::to_string(&crate::platform::windows::get_printer_names().unwrap_or_default())
-            .unwrap_or_default(),
-    );
-    #[cfg(not(target_os = "windows"))]
-    return SyncReturn("".to_owned());
-}
-
 pub fn main_get_common(key: String) -> String {
-    if key == "is-printer-installed" {
-        #[cfg(target_os = "windows")]
-        {
-            return match remote_printer::is_rd_printer_installed(&get_app_name()) {
-                Ok(r) => r.to_string(),
-                Err(e) => e.to_string(),
-            };
-        }
-        #[cfg(not(target_os = "windows"))]
-        return false.to_string();
-    } else if key == "is-support-printer-driver" {
-        #[cfg(target_os = "windows")]
-        return crate::platform::is_win_10_or_greater().to_string();
-        #[cfg(not(target_os = "windows"))]
-        return false.to_string();
-    } else if key == "transfer-job-id" {
-        return base::fs::get_next_job_id().to_string();
-    } else if key == "is-remote-modify-enabled-by-control-permissions" {
+    if key == "is-remote-modify-enabled-by-control-permissions" {
         return match is_remote_modify_enabled_by_control_permissions() {
             Some(true) => "true",
             Some(false) => "false",
@@ -2793,38 +2241,6 @@ fn verified_update_artifact_for_release_page_url(
 }
 
 pub fn main_set_common(_key: String, _value: String) {
-    #[cfg(target_os = "windows")]
-    if _key == "install-printer" && crate::platform::is_win_10_or_greater() {
-        std::thread::spawn(move || {
-            let (success, msg) = match remote_printer::install_update_printer(&get_app_name()) {
-                Ok(_) => (true, "".to_owned()),
-                Err(e) => {
-                    let err = e.to_string();
-                    log::error!("Failed to install/update rd printer: {}", &err);
-                    (false, err)
-                }
-            };
-            if success {
-                // Use `ipc` to notify the server process to update the install option in the registry.
-                // Because `install_update_printer()` may prompt for permissions, there is no need to prompt again here.
-                if let Err(e) = crate::ipc::set_install_option(
-                    crate::platform::REG_NAME_INSTALL_PRINTER.to_string(),
-                    "1".to_string(),
-                ) {
-                    log::error!("Failed to set install printer option: {}", e);
-                }
-            }
-            let data = HashMap::from([
-                ("name", serde_json::json!("install-printer-res")),
-                ("success", serde_json::json!(success)),
-                ("msg", serde_json::json!(msg)),
-            ]);
-            let _res = flutter::push_global_event(
-                flutter::APP_TYPE_MAIN,
-                serde_json::ser::to_string(&data).unwrap_or("".to_owned()),
-            );
-        });
-    }
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         use crate::updater::get_update_download_file_from_url;

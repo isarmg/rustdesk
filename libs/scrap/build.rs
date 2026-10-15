@@ -228,7 +228,7 @@ fn ffmpeg() {
 
 fn main() {
     // in this crate, these are also valid configurations
-    println!("cargo:rustc-check-cfg=cfg(dxgi,quartz,x11)");
+    println!("cargo:rustc-check-cfg=cfg(dxgi,quartz)");
 
     // there is problem with cfg(target_os) in build.rs, so use our workaround
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
@@ -260,8 +260,5 @@ fn main() {
     } else if cfg!(target_os = "macos") {
         // Quartz is second because macOS is the (annoying) exception.
         println!("cargo:rustc-cfg=quartz");
-    } else if cfg!(unix) {
-        // On UNIX we pray that X11 (with XCB) is available.
-        println!("cargo:rustc-cfg=x11");
     }
 }

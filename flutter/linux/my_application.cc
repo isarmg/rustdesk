@@ -1,11 +1,6 @@
 #include "my_application.h"
 
-#include "bump_mouse.h"
-
 #include <flutter_linux/flutter_linux.h>
-#ifdef GDK_WINDOWING_X11
-#include <gdk/gdkx.h>
-#endif
 #if defined(GDK_WINDOWING_WAYLAND) && defined(HAS_KEYBOARD_SHORTCUTS_INHIBIT)
 #include "wayland_shortcuts_inhibit.h"
 #endif
@@ -17,12 +12,10 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
-  FlMethodChannel* host_channel;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
-void host_channel_call_handler(FlMethodChannel* channel, FlMethodCall* method_call, gpointer user_data);
 
 GtkWidget *find_gl_area(GtkWidget *widget);
 void try_set_transparent(GtkWindow* window, GdkScreen* screen, FlView* view);
@@ -30,7 +23,7 @@ void try_set_transparent(GtkWindow* window, GdkScreen* screen, FlView* view);
 extern bool gIsConnectionManager;
 
 // --- Side mouse button support (back/forward) ---
-// Flutter's Linux embedder doesn't deliver X11 button 8/9 events to Dart.
+// Forward side mouse button events through GDK to Dart.
 // We intercept them via GDK and forward through a dedicated platform channel.
 
 static const char* kSideButtonChannelName = "org.rustdesk.rustdesk/side_buttons";
@@ -121,33 +114,11 @@ static void my_application_activate(GApplication* application) {
       gtk_window_set_icon(window, icon);
     }
   }
-  // Use a header bar when running in GNOME as this is the common style used
-  // by applications and is the setup most users will be using (e.g. Ubuntu
-  // desktop).
-  // If running on X and not using GNOME then just use a traditional title bar
-  // in case the window manager does more exotic layout, e.g. tiling.
-  // If running on Wayland assume the header bar will work (may need changing
-  // if future cases occur).
-  gboolean use_header_bar = TRUE;
-  GdkScreen* screen = NULL;
-#ifdef GDK_WINDOWING_X11
-  screen = gtk_window_get_screen(window);
-  if (screen != NULL && GDK_IS_X11_SCREEN(screen)) {
-    const gchar* wm_name = gdk_x11_screen_get_window_manager_name(screen);
-    if (g_strcmp0(wm_name, "GNOME Shell") != 0) {
-      use_header_bar = FALSE;
-    }
-  }
-#endif
-  if (use_header_bar) {
-    GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
-    gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "rustdesk");
-    gtk_header_bar_set_show_close_button(header_bar, TRUE);
-    gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
-  } else {
-    gtk_window_set_title(window, "rustdesk");
-  }
+  GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
+  gtk_widget_show(GTK_WIDGET(header_bar));
+  gtk_header_bar_set_title(header_bar, "rustdesk");
+  gtk_header_bar_set_show_close_button(header_bar, TRUE);
+  gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
 
   // auto bdw = bitsdojo_window_from(window); // <--- add this line
   // bdw->setCustomFrame(true);               // <-- add this line
@@ -172,23 +143,11 @@ static void my_application_activate(GApplication* application) {
 
   // Register callback for sub-windows created by desktop_multi_window plugin.
   // Handles both Wayland shortcuts inhibition (guarded inside) and side button
-  // forwarding. Safe to call on X11-only builds - the plugin just stores the
-  // callback pointer regardless of windowing system.
+  // forwarding for each Wayland window.
   desktop_multi_window_plugin_set_window_created_callback(
       (WindowCreatedCallback)on_subwindow_created);
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
-
-  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
-  self->host_channel = fl_method_channel_new(
-    fl_engine_get_binary_messenger(fl_view_get_engine(view)),
-    "org.rustdesk.rustdesk/host",
-    FL_METHOD_CODEC(codec));
-  fl_method_channel_set_method_call_handler(
-    self->host_channel,
-    host_channel_call_handler,
-    self,
-    nullptr);
 
   // Forward side mouse button events (back/forward) to Dart on the main window.
   FlMethodChannel* side_channel = side_buttons_create_channel(fl_view_get_engine(view));
@@ -221,7 +180,6 @@ static gboolean my_application_local_command_line(GApplication* application, gch
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
-  g_clear_object(&self->host_channel);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
@@ -240,60 +198,6 @@ MyApplication* my_application_new() {
                                      nullptr));
 }
 
-void host_channel_call_handler(FlMethodChannel* channel, FlMethodCall* method_call, gpointer user_data)
-{
-  if (strcmp(fl_method_call_get_name(method_call), "bumpMouse") == 0) {
-    FlValue *args = fl_method_call_get_args(method_call);
-
-    FlValue *dxValue = nullptr;
-    FlValue *dyValue = nullptr;
-
-    switch (fl_value_get_type(args))
-    {
-      case FL_VALUE_TYPE_MAP:
-      {
-        dxValue = fl_value_lookup_string(args, "dx");
-        dyValue = fl_value_lookup_string(args, "dy");
-
-        break;
-      }
-      case FL_VALUE_TYPE_LIST:
-      {
-        int listSize = fl_value_get_length(args);
-
-        dxValue = (listSize >= 1) ? fl_value_get_list_value(args, 0) : nullptr;
-        dyValue = (listSize >= 2) ? fl_value_get_list_value(args, 1) : nullptr;
-
-        break;
-      }
-
-      default: break;
-    }
-
-    int dx = 0, dy = 0;
-
-    if (dxValue && (fl_value_get_type(dxValue) == FL_VALUE_TYPE_INT)) {
-      dx = fl_value_get_int(dxValue);
-    }
-
-    if (dyValue && (fl_value_get_type(dyValue) == FL_VALUE_TYPE_INT)) {
-      dy = fl_value_get_int(dyValue);
-    }
-
-    bool result = bump_mouse(dx, dy);
-
-    FlValue *result_value = fl_value_new_bool(result);
-
-    GError *error = nullptr;
-
-    if (!fl_method_call_respond_success(method_call, result_value, &error)) {
-      g_warning("Failed to send Flutter Platform Channel response: %s", error->message);
-      g_error_free(error);
-    }
-
-    fl_value_unref(result_value);
-  }
-}
 
 GtkWidget *find_gl_area(GtkWidget *widget)
 {

@@ -52,7 +52,7 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 
 # System-level dependencies.
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
+pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0 gdk-wayland-3.0)
 
 # Wayland protocol for keyboard shortcuts inhibit
 pkg_check_modules(WAYLAND_CLIENT IMPORTED_TARGET wayland-client)
@@ -113,8 +113,6 @@ add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
   "wayland_shortcuts_inhibit.cc"
-  "bump_mouse.cc"
-  "bump_mouse_x11.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   ${WAYLAND_PROTOCOL_SOURCES}
 )

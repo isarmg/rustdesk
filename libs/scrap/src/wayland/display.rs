@@ -83,27 +83,6 @@ fn run_with_timeout(
     }
 }
 
-// There are some limitations with xrandr method:
-// 1. It only works when XWayland is running.
-// 2. The distro may not have xrandr installed by default.
-// 3. xrandr may not report "primary" in its output. eg. openSUSE Leap 15.6 KDE Plasma.
-fn try_xrandr_primary() -> Option<String> {
-    let output = Command::new("xrandr").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        if line.contains("primary") && line.contains("connected") {
-            if let Some(name) = line.split_whitespace().next() {
-                return Some(name.to_string());
-            }
-        }
-    }
-    None
-}
-
 fn try_kscreen_primary() -> Option<String> {
     if !base::platform::linux::is_kde_session() {
         return None;
@@ -178,9 +157,7 @@ fn try_gdbus_primary() -> Option<String> {
 }
 
 fn get_primary_monitor() -> Option<String> {
-    try_xrandr_primary()
-        .or_else(try_kscreen_primary)
-        .or_else(try_gdbus_primary)
+    try_kscreen_primary().or_else(try_gdbus_primary)
 }
 
 #[cfg(feature = "drm")]

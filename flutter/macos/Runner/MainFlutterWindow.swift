@@ -4,13 +4,11 @@ import FlutterMacOS
 import desktop_multi_window
 // import bitsdojo_window_macos
 
-import desktop_drop
 import device_info_plus
 import flutter_custom_cursor
 import package_info_plus
 import path_provider_foundation
 import screen_retriever
-import sqflite
 // import tray_manager
 import uni_links_desktop
 import url_launcher_macos
@@ -73,12 +71,10 @@ class MainFlutterWindow: NSWindow {
             // DesktopLifecyclePlugin.register(with: controller.registrar(forPlugin: "DesktopLifecyclePlugin"))
             // Note: copy below from above RegisterGeneratedPlugins
             self.setMethodHandler(registrar: controller.registrar(forPlugin: "RustDeskPlugin"))
-            DesktopDropPlugin.register(with: controller.registrar(forPlugin: "DesktopDropPlugin"))
             DeviceInfoPlusMacosPlugin.register(with: controller.registrar(forPlugin: "DeviceInfoPlusMacosPlugin"))
             FlutterCustomCursorPlugin.register(with: controller.registrar(forPlugin: "FlutterCustomCursorPlugin"))
             FPPPackageInfoPlusPlugin.register(with: controller.registrar(forPlugin: "FPPPackageInfoPlusPlugin"))
             PathProviderPlugin.register(with: controller.registrar(forPlugin: "PathProviderPlugin"))
-            SqflitePlugin.register(with: controller.registrar(forPlugin: "SqflitePlugin"))
             // TrayManagerPlugin.register(with: controller.registrar(forPlugin: "TrayManagerPlugin"))
             UniLinksDesktopPlugin.register(with: controller.registrar(forPlugin: "UniLinksDesktopPlugin"))
             UrlLauncherPlugin.register(with: controller.registrar(forPlugin: "UrlLauncherPlugin"))

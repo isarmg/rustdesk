@@ -7,26 +7,23 @@ cfg_if! {
     if #[cfg(quartz)] {
         mod quartz;
         pub use self::quartz::*;
-    } else if #[cfg(x11)] {
-        cfg_if! {
-            if #[cfg(feature="wayland")] {
-                mod linux;
-                mod wayland;
-                mod x11;
-                #[cfg(all(target_os = "linux", feature = "drm"))]
-                pub mod drmtap_dl;
-                #[cfg(all(target_os = "linux", feature = "drm"))]
-                pub mod drm_reader;
-                #[cfg(all(target_os = "linux", feature = "drm"))]
-                pub mod drm_render;
-                pub use self::linux::*;
-                pub use self::wayland::set_map_err;
-                pub use self::x11::PixelBuffer;
-            } else {
-                mod x11;
-                pub use self::x11::*;
-            }
-        }
+    } else if #[cfg(target_os = "linux")] {
+        #[cfg(not(feature = "wayland"))]
+        compile_error!("Linux screen capture requires the wayland feature");
+        #[cfg(feature = "wayland")]
+        mod linux;
+        #[cfg(feature = "wayland")]
+        mod wayland;
+        #[cfg(feature = "drm")]
+        pub mod drmtap_dl;
+        #[cfg(feature = "drm")]
+        pub mod drm_reader;
+        #[cfg(feature = "drm")]
+        pub mod drm_render;
+        #[cfg(feature = "wayland")]
+        pub use self::linux::*;
+        #[cfg(feature = "wayland")]
+        pub use self::wayland::set_map_err;
     } else if #[cfg(dxgi)] {
         mod dxgi;
         pub use self::dxgi::*;
@@ -52,9 +49,6 @@ pub const STRIDE_ALIGN: usize = 64; // commonly used in libvpx vpx_img_alloc cal
 pub const HW_STRIDE_ALIGN: usize = 0; // recommended by av_frame_get_buffer
 
 pub mod aom;
-#[cfg(not(any(target_os = "ios")))]
-pub mod camera;
-pub mod record;
 mod vpx;
 
 #[repr(usize)]
@@ -262,23 +256,6 @@ pub struct EncodeYuvFormat {
     pub v: usize,
 }
 
-#[cfg(x11)]
-#[inline]
-pub fn is_x11() -> bool {
-    base::platform::linux::is_x11_or_headless()
-}
-
-#[cfg(x11)]
-#[inline]
-pub fn is_cursor_embedded() -> bool {
-    if is_x11() {
-        x11::IS_CURSOR_EMBEDDED
-    } else {
-        false
-    }
-}
-
-#[cfg(not(x11))]
 #[inline]
 pub fn is_cursor_embedded() -> bool {
     false

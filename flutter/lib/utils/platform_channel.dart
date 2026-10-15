@@ -18,6 +18,8 @@ class RdPlatformChannel {
 
   /// Bump the position of the mouse cursor, if applicable
   Future<bool> bumpMouse({required int dx, required int dy}) async {
+    // Wayland does not allow warping the local cursor. Use edge-scroll fallback.
+    if (isLinux) return false;
     // No debug output; this call is too chatty.
 
     bool? result = await _hostMethodChannel

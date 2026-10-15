@@ -783,7 +783,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       if (call.method == kWindowMainWindowOnTop) {
         windowOnTop(null);
       } else if (call.method == kWindowRefreshCurrentUser) {
-        gFFI.userModel.refreshCurrentUser();
       } else if (call.method == kWindowGetScreenList) {
         return jsonEncode(
             (await window_size.getScreenList()).map(screenToMap).toList());
@@ -796,11 +795,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       } else if (call.method == kWindowConnect) {
         await connectMainDesktop(
           call.arguments['id'],
-          isFileTransfer: call.arguments['isFileTransfer'],
-          isViewCamera: call.arguments['isViewCamera'],
-          isTerminal: call.arguments['isTerminal'],
-          isTcpTunneling: call.arguments['isTcpTunneling'],
-          isRDP: call.arguments['isRDP'],
           password: call.arguments['password'],
           forceRelay: call.arguments['forceRelay'],
           connToken: call.arguments['connToken'],

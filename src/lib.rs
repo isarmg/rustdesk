@@ -23,12 +23,6 @@ pub use self::rendezvous_mediator::*;
 pub mod common;
 #[cfg(not(any(target_os = "ios")))]
 pub mod ipc;
-#[cfg(not(any(
-    target_os = "android",
-    target_os = "ios",
-    feature = "flutter"
-)))]
-pub mod ui;
 pub(crate) mod update_metadata;
 pub(crate) mod update_hash;
 #[cfg(target_os = "macos")]
@@ -50,10 +44,6 @@ pub mod core_main;
 mod custom_server;
 mod lang;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-mod port_forward;
-mod port_forward_mux;
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod tray;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -67,9 +57,6 @@ mod ui_interface;
 mod ui_session_interface;
 
 mod hbbs_http;
-
-#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-pub mod clipboard_file;
 
 pub mod privacy_mode;
 
