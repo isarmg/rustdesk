@@ -95,9 +95,7 @@ jobs:
     needs: [validate-update-metadata-keys]
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: write
-
+    # Inherit the caller token: CI is read-only; publishing callers must grant writes.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -936,9 +934,7 @@ jobs:
     concurrency:
       group: signed-update-${{ inputs.upload-tag }}
       cancel-in-progress: false
-    permissions:
-      # Required to inspect and publish signed release assets for the target tag.
-      contents: write
+    # Publication permissions come from the explicitly enabled publishing caller.
     steps:
       - name: Refuse to replace published update metadata
         shell: bash

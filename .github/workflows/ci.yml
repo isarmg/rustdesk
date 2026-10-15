@@ -24,6 +24,9 @@ on:
       - "appimage/**"
       - "flatpak/**"
 
+permissions:
+  contents: read
+
 jobs:
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
